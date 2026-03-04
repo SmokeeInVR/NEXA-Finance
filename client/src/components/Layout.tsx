@@ -1,5 +1,4 @@
 import { BottomNav } from "./BottomNav";
-import logoIcon from "@assets/N_Single_1769890208909.JPG";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -9,15 +8,12 @@ interface LayoutProps {
 function NexaLogo() {
   return (
     <div className="relative w-10 h-10">
-      {/* Subtle glow effect */}
       <div className="absolute inset-0 bg-primary/30 rounded-lg blur-md" />
-      {/* Logo image */}
-      <img 
-        src={logoIcon} 
-        alt="Nexa Finance" 
-        className="relative w-full h-full rounded-lg object-cover"
-        data-testid="img-logo"
-      />
+      <div className="relative w-full h-full rounded-lg bg-black border border-yellow-600/50 flex items-center justify-center">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#D4A53E" strokeWidth="2" className="w-6 h-6">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+        </svg>
+      </div>
     </div>
   );
 }
@@ -25,7 +21,6 @@ function NexaLogo() {
 export function Layout({ children, title }: LayoutProps) {
   return (
     <div className="min-h-screen bg-background font-body pb-24 text-foreground">
-      {/* Header */}
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-md border-b border-border px-4 py-3 safe-top">
         <div className="flex items-center gap-3">
           <NexaLogo />
@@ -37,12 +32,9 @@ export function Layout({ children, title }: LayoutProps) {
           </div>
         </div>
       </header>
-
-      {/* Main Content */}
       <main className="px-4 py-6 max-w-md mx-auto w-full animate-in fade-in duration-500 slide-in-from-bottom-2">
         {children}
       </main>
-
       <BottomNav />
     </div>
   );
