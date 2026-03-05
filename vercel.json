@@ -5,19 +5,11 @@
       "src": "dist/index.cjs",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": ["dist/public/**"]
+        "includeFiles": ["dist/**"]
       }
     }
   ],
   "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "dist/index.cjs"
-    },
-    {
-      "src": "/assets/(.*)",
-      "dest": "dist/index.cjs"
-    },
     {
       "src": "/(.*)",
       "dest": "dist/index.cjs"
