@@ -3,10 +3,21 @@
   "builds": [
     {
       "src": "dist/index.cjs",
-      "use": "@vercel/node"
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["dist/public/**"]
+      }
     }
   ],
   "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "dist/index.cjs"
+    },
+    {
+      "src": "/assets/(.*)",
+      "dest": "dist/index.cjs"
+    },
     {
       "src": "/(.*)",
       "dest": "dist/index.cjs"
