@@ -715,6 +715,107 @@ export async function registerRoutes(
     const totalCash = await storage.computeTotalCash(includeTrading);
     res.json({ totalCash, includeTrading });
   });
+// === NEXA OS SUMMARY ENDPOINT ===
+app.get("/api/os/summary", async (_req, res) => {
+  try {
+    // 1. Total cash (excluding business + bills pool)
+    const totalCash = await storage.computeTotalCash(false);
+    const totalCashWithTrading = await storage.computeTotalCash(true);
 
+    // 2. All accounts with live balances
+    const accountsWithBalances = await storage.getAccountsWithBalances();
+
+    // 3. Latest weekly income
+    const now = new Date();
+    const day = now.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    const monday = new Date(now);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(monday.getDate() + diff);
+    const currentWeekStart = monday.toISOString().split("T")[0];
+    const weekEnd = new Date(monday);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    const currentWeekEnd = weekEnd.toISOString().split("T")[0];
+    const weeklyIncome = await storage.getWeeklyIncomeFromTransactions(currentWeekStart, currentWeekEnd);
+
+    // 4. Debts summary
+    const debtsWithPayments = await storage.getDebtsWithPayments();
+    const totalDebt = debtsWithPayments.reduce((sum, d) => sum + d.remainingBalance, 0);
+    const debtCount = debtsWithPayments.length;
+
+    // 5. Recent spending (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const recentTransactions = await storage.getTransactions({
+      startDate: thirtyDaysAgo.toISOString().split("T")[0],
+      endDate: now.toISOString().split("T")[0],
+      type: "expense"
+    });
+    const monthlySpend = recentTransactions.reduce((sum, t) => sum + parseFloat(t.amount), 0);
+
+    // 6. Investment settings for FIRE progress
+    const investmentSettings = await storage.getInvestmentSettings();
+
+    // 7. Budget settings
+    const budgetSettingsData = await storage.getBudgetSettings();
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      cash: {
+        total: totalCash,
+        totalWithTrading: totalCashWithTrading,
+      },
+      accounts: accountsWithBalances.map(a => ({
+        id: a.id,
+        name: a.name,
+        type: a.type,
+        currentBalance: a.currentBalance,
+        excludeFromTotals: a.excludeFromTotals,
+      })),
+      income: {
+        weekStartDate: currentWeekStart,
+        myIncome: weeklyIncome.myIncome,
+        spouseIncome: weeklyIncome.spouseIncome,
+        totalWeekly: weeklyIncome.total,
+        estimatedMonthly: weeklyIncome.total * 4.33,
+      },
+      debts: {
+        totalRemaining: totalDebt,
+        count: debtCount,
+        items: debtsWithPayments.map(d => ({
+          id: d.id,
+          name: d.name,
+          remainingBalance: d.remainingBalance,
+          apr: d.apr,
+          monthlyPayment: d.monthlyPayment,
+        })),
+      },
+      spending: {
+        last30Days: monthlySpend,
+        transactionCount: recentTransactions.length,
+      },
+      fire: investmentSettings ? {
+        investedBalance: parseFloat(investmentSettings.investedBalance || "0"),
+        monthlyContribution: parseFloat(investmentSettings.monthlyContribution || "0"),
+        targetMonthlyIncome: parseFloat(investmentSettings.targetMonthlyIncome || "0"),
+        currentAge: investmentSettings.currentAge,
+        targetAge: investmentSettings.targetAge,
+      } : null,
+      budget: budgetSettingsData ? {
+        monthlyFixedBills: parseFloat(budgetSettingsData.monthlyFixedBills || "0"),
+        savingsMode: budgetSettingsData.savingsMode,
+        savingsValue: parseFloat(budgetSettingsData.savingsValue || "0"),
+      } : null,
+    });
+  } catch (err) {
+    console.error("OS summary error:", err);
+    res.status(500).json({ message: "Failed to generate OS summary" });
+  }
+});
+```
+
+Once you add this and push to GitHub (Railway will auto-redeploy), you can test it by visiting:
+```
+https://your-railway-url.up.railway.app/api/os/summary
   return httpServer;
 }
