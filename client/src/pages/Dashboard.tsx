@@ -12,18 +12,19 @@ import { useAccountsWithBalances } from "@/hooks/use-accounts";
 import { useCreateTransaction, useTransactions } from "@/hooks/use-transactions";
 import { insertBudgetSettingsSchema, type InsertBudgetSettings, type WeeklyIncomeLog, type AccountBalance, type SpendingLog, type BillsFundingLog, type WeeklyCashSnapshot } from "@shared/schema";
 import { Switch } from "@/components/ui/switch";
-import { Loader2, TrendingUp, Wallet, ArrowRightLeft, PieChart, Save, Receipt, DollarSign, Check, Trash2 } from "lucide-react";
+import { Loader2, TrendingUp, Wallet, ArrowRightLeft, PieChart, Save, Receipt, DollarSign, Check, Trash2, Plus, X } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { startOfWeek, endOfWeek, isWithinInterval, startOfMonth, format, differenceInCalendarWeeks } from "date-fns";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function Dashboard() {
   const { data: settings, isLoading: isSettingsLoading } = useBudgetSettings();
   const updateSettings = useUpdateBudgetSettings();
   const { data: debts } = useDebts();
   const { toast } = useToast();
-  
+
   const { data: incomeLogs, isLoading: isLogsLoading } = useQuery<WeeklyIncomeLog[]>({
     queryKey: ["/api/income"],
   });
@@ -43,12 +44,9 @@ export default function Dashboard() {
     retry: true,
   });
 
-  // Force refetch on visibility change or focus
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refetchLatest();
-      }
+      if (document.visibilityState === 'visible') refetchLatest();
     };
     const handleFocus = () => refetchLatest();
     window.addEventListener('focus', handleFocus);
@@ -78,6 +76,47 @@ export default function Dashboard() {
   const [billsMyTransfer, setBillsMyTransfer] = useState("");
   const [billsSpouseTransfer, setBillsSpouseTransfer] = useState("");
   const [billsNote, setBillsNote] = useState("");
+
+  // === INCOME MODAL STATE ===
+  const [showIncomeModal, setShowIncomeModal] = useState(false);
+  const [incomeMyAmount, setIncomeMyAmount] = useState("");
+  const [incomeSpouseAmount, setIncomeSpouseAmount] = useState("");
+  const [incomeDepositEnabled, setIncomeDepositEnabled] = useState(true);
+  const [myDepositAccountId, setMyDepositAccountId] = useState<string>("");
+  const [spouseDepositAccountId, setSpouseDepositAccountId] = useState<string>("");
+
+  const weekStartForModal = startOfWeek(new Date(), { weekStartsOn: 1 });
+  const currentWeekStartDateForModal = format(weekStartForModal, "yyyy-MM-dd");
+
+  const saveIncomeMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/income", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/income"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/income/latest"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts/with-balances"] });
+      setShowIncomeModal(false);
+      setIncomeMyAmount("");
+      setIncomeSpouseAmount("");
+      toast({ title: "Income logged!", description: "Weekly income saved successfully." });
+    },
+    onError: () => {
+      toast({ title: "Error saving income", variant: "destructive" });
+    }
+  });
+
+  const handleSaveIncome = () => {
+    saveIncomeMutation.mutate({
+      weekStartDate: currentWeekStartDateForModal,
+      myIncome: incomeMyAmount || "0",
+      spouseIncome: incomeSpouseAmount || "0",
+      deposited: incomeDepositEnabled,
+      myDepositAccountId: myDepositAccountId ? parseInt(myDepositAccountId) : null,
+      spouseDepositAccountId: spouseDepositAccountId ? parseInt(spouseDepositAccountId) : null,
+    });
+  };
 
   const saveBillsFunding = useMutation({
     mutationFn: async (data: { weekStartDate: string; myTransfer: string; spouseTransfer: string; note?: string }) => {
@@ -161,14 +200,12 @@ export default function Dashboard() {
     }
   }, [settings, form]);
 
-  // Pre-fill bills funding form when data loads
   const weekStartForFunding = startOfWeek(new Date(), { weekStartsOn: 1 });
   const currentWeekStartDateForFunding = format(weekStartForFunding, "yyyy-MM-dd");
   const currentWeekFundingData = billsFundingLogs?.find(l => l.weekStartDate === currentWeekStartDateForFunding);
-  
+
   useEffect(() => {
     if (currentWeekFundingData) {
-      // Populate form when data exists and fields are empty
       if (billsMyTransfer === "" && billsSpouseTransfer === "") {
         setBillsMyTransfer(currentWeekFundingData.myTransfer);
         setBillsSpouseTransfer(currentWeekFundingData.spouseTransfer);
@@ -176,6 +213,16 @@ export default function Dashboard() {
       }
     }
   }, [currentWeekFundingData]);
+
+  // Pre-select deposit accounts when modal opens
+  useEffect(() => {
+    if (showIncomeModal && ledgerAccounts) {
+      const personalAccount = ledgerAccounts.find(a => a.type === "personal");
+      const spouseAccount = ledgerAccounts.find(a => a.type === "spouse");
+      if (personalAccount && !myDepositAccountId) setMyDepositAccountId(String(personalAccount.id));
+      if (spouseAccount && !spouseDepositAccountId) setSpouseDepositAccountId(String(spouseAccount.id));
+    }
+  }, [showIncomeModal, ledgerAccounts]);
 
   if (isSettingsLoading || isLogsLoading || isSpendingLoading || isLatestLoading) {
     return (
@@ -187,15 +234,14 @@ export default function Dashboard() {
     );
   }
 
-  // SINGLE SOURCE OF TRUTH: Get the latest log entry from dedicated endpoint
   const weeklyMe = parseFloat(String(latestIncomeResponse?.myIncome ?? 0));
   const weeklySpouse = parseFloat(String(latestIncomeResponse?.spouseIncome ?? 0));
   const totalWeeklyIncome = parseFloat(String(latestIncomeResponse?.totalWeeklyIncome ?? 0));
+  const hasIncomeThisWeek = totalWeeklyIncome > 0;
 
   const splitMode = form.watch("splitMode");
-  // For the split calculation, we still use the ratio if AUTO, otherwise custom
-  const activeMyPct = splitMode === "AUTO" && totalWeeklyIncome > 0 
-    ? (weeklyMe / totalWeeklyIncome) * 100 
+  const activeMyPct = splitMode === "AUTO" && totalWeeklyIncome > 0
+    ? (weeklyMe / totalWeeklyIncome) * 100
     : parseFloat(form.watch("mySplitPct") || "50");
   const activeSpousePct = 100 - activeMyPct;
 
@@ -204,8 +250,6 @@ export default function Dashboard() {
 
   const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
   const weekEnd = endOfWeek(new Date(), { weekStartsOn: 1 });
-  
-  // Bills Funding Calculations
   const currentWeekStartDate = format(weekStart, "yyyy-MM-dd");
   const monthStart = startOfMonth(new Date());
   const currentWeekFunding = currentWeekFundingData;
@@ -214,52 +258,37 @@ export default function Dashboard() {
     ? parseFloat(currentWeekFunding.myTransfer) + parseFloat(currentWeekFunding.spouseTransfer)
     : 0;
 
-  // Use ledger transactions (type "spend") for weekly spending calculations
   const currentWeekLedgerSpending = (ledgerTransactions || [])
     .filter(tx => tx.type === "spend" && isWithinInterval(new Date(tx.date), { start: weekStart, end: weekEnd }));
   const totalWeeklySpent = currentWeekLedgerSpending.reduce((acc, tx) => acc + parseFloat(tx.amount), 0);
+  const hasSpendingThisWeek = totalWeeklySpent > 0 || currentWeekLedgerSpending.length > 0;
   const remainingThisWeek = totalWeeklyIncome - actualWeeklyContributions - totalWeeklySpent;
-  
-  // MTD calculations - count weeks that START within the current month
+
   const today = new Date();
   const currentWeekStart = startOfWeek(today, { weekStartsOn: 1 });
-  
-  // Calculate week number within the month (Week 1 = first week starting in this month)
-  // If month starts mid-week, that partial week doesn't count - Week 1 starts on first Monday in/after the 1st
   const firstMondayOfMonth = startOfWeek(monthStart, { weekStartsOn: 1 });
-  const adjustedFirstMonday = firstMondayOfMonth < monthStart 
-    ? new Date(firstMondayOfMonth.getTime() + 7 * 24 * 60 * 60 * 1000) // Next Monday
+  const adjustedFirstMonday = firstMondayOfMonth < monthStart
+    ? new Date(firstMondayOfMonth.getTime() + 7 * 24 * 60 * 60 * 1000)
     : firstMondayOfMonth;
-  
-  // Calculate which week of the month we're in (1-indexed)
   const weeksElapsedThisMonth = currentWeekStart >= adjustedFirstMonday
     ? Math.max(1, differenceInCalendarWeeks(currentWeekStart, adjustedFirstMonday, { weekStartsOn: 1 }) + 1)
-    : 0; // Before first full week
-  
-  // Filter logs for weeks that start within the current month
-  // Use parseISO for consistent date parsing (avoids timezone issues with new Date())
+    : 0;
   const adjustedFirstMondayStr = format(adjustedFirstMonday, "yyyy-MM-dd");
   const currentWeekStartStr = format(currentWeekStart, "yyyy-MM-dd");
   const mtdLogs = (billsFundingLogs || []).filter(l => {
     return l.weekStartDate >= adjustedFirstMondayStr && l.weekStartDate <= currentWeekStartStr;
   });
-  
   const mtdTarget = weeklyFixed * weeksElapsedThisMonth;
   const mtdFunded = mtdLogs.reduce((acc, l) => acc + parseFloat(l.myTransfer) + parseFloat(l.spouseTransfer), 0);
   const mtdDifference = mtdFunded - mtdTarget;
   const logsThisMonth = mtdLogs.length;
-  
-  // Target splits for this week
+
   const myWeeklyTarget = weeklyFixed * (activeMyPct / 100);
   const spouseWeeklyTarget = weeklyFixed * (activeSpousePct / 100);
-
-  // Current week actual values (from existing log or form state)
   const currentMyActual = currentWeekFunding ? parseFloat(currentWeekFunding.myTransfer) : parseFloat(billsMyTransfer || "0");
   const currentSpouseActual = currentWeekFunding ? parseFloat(currentWeekFunding.spouseTransfer) : parseFloat(billsSpouseTransfer || "0");
 
   const handleSaveBillsFunding = async () => {
-    // Bills Funding is a pure tracker - no transactions created
-    // Bills money is physically in Joint Checking, not a separate Bills Pool
     saveBillsFunding.mutate({
       weekStartDate: currentWeekStartDate,
       myTransfer: billsMyTransfer || "0",
@@ -283,11 +312,13 @@ export default function Dashboard() {
   const bucketDebt = getBucketAmount((form.watch("debtBufferMode") as any) || "PERCENT", form.watch("debtBufferValue") || "0");
   const bucketTrading = getBucketAmount((form.watch("tradingMode") as any) || "PERCENT", form.watch("tradingValue") || "0");
   const totalAllocated = bucketSavings + bucketInvesting + bucketDebt + bucketTrading;
-  const leftover = allocatable - totalAllocated;
+
+  const personalAccounts = ledgerAccounts?.filter(a => ["personal", "spouse", "joint", "bucket"].includes(a.type) && !a.excludeFromTotals) || [];
 
   return (
     <Layout title="Dashboard">
       <div className="space-y-6">
+
         {/* Summary Cards */}
         <div className="grid grid-cols-2 gap-3">
           <Card className="border-border bg-card shadow-lg">
@@ -297,9 +328,21 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-4 pt-0">
-              <div className="text-2xl font-bold font-display tracking-tight text-foreground">
-                ${totalWeeklyIncome.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-              </div>
+              {hasIncomeThisWeek ? (
+                <div className="text-2xl font-bold font-display tracking-tight text-foreground">
+                  ${totalWeeklyIncome.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                </div>
+              ) : (
+                <div>
+                  <p className="text-sm text-muted-foreground">Not logged</p>
+                  <button
+                    onClick={() => setShowIncomeModal(true)}
+                    className="text-xs text-gold underline mt-0.5"
+                  >
+                    Log now
+                  </button>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -310,14 +353,18 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-4 pt-0">
-              <div className={`text-2xl font-bold font-display tracking-tight ${monthlyMargin >= 0 ? 'text-success' : 'text-soft-red'}`}>
-                ${(monthlyMargin / 4.33).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-              </div>
+              {hasIncomeThisWeek ? (
+                <div className={`text-2xl font-bold font-display tracking-tight ${weeklyMargin >= 0 ? 'text-success' : 'text-soft-red'}`}>
+                  ${weeklyMargin.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">—</p>
+              )}
             </CardContent>
           </Card>
         </div>
 
-        {/* Weekly Spending Section */}
+        {/* Weekly Spending */}
         <Card className="border-border bg-card shadow-2xl overflow-hidden">
           <CardHeader className="pb-3 border-b border-border bg-secondary/20">
             <CardTitle className="text-lg flex items-center gap-2 text-gold">
@@ -326,37 +373,51 @@ export default function Dashboard() {
             <CardDescription className="text-muted-foreground text-xs uppercase tracking-widest font-bold">Current week status</CardDescription>
           </CardHeader>
           <CardContent className="p-6 space-y-6">
-            <div className="flex justify-between items-end border-b pb-4 border-border">
-              <div className="space-y-1">
-                <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Remaining This Week</Label>
-                <p className={`text-3xl font-bold font-display ${remainingThisWeek >= 0 ? 'text-success' : 'text-soft-red'}`}>
-                  ${Math.abs(remainingThisWeek).toFixed(2)}
-                  <span className="text-xs ml-1 font-bold">{remainingThisWeek >= 0 ? 'Left' : 'Over'}</span>
-                </p>
-              </div>
-              <div className="text-right space-y-1">
-                <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Spent</Label>
-                <p className="text-lg font-bold font-mono text-foreground">${totalWeeklySpent.toFixed(2)}</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-              {[
-                { label: "Groceries", amount: currentWeekLedgerSpending.filter(s => s.category === "Groceries").reduce((acc, s) => acc + parseFloat(s.amount), 0) },
-                { label: "Gas / Fuel", amount: currentWeekLedgerSpending.filter(s => s.category === "Gas / Fuel").reduce((acc, s) => acc + parseFloat(s.amount), 0) },
-                { label: "Personal", amount: currentWeekLedgerSpending.filter(s => ["Personal (Me)", "Personal (Spouse)"].includes(s.category || "")).reduce((acc, s) => acc + parseFloat(s.amount), 0) },
-                { label: "Household", amount: currentWeekLedgerSpending.filter(s => s.category === "Household / Misc").reduce((acc, s) => acc + parseFloat(s.amount), 0) },
-              ].map((cat) => (
-                <div key={cat.label} className="flex justify-between items-center">
-                  <span className="text-sm text-foreground font-medium">{cat.label}</span>
-                  <span className="text-sm font-bold font-mono text-gold">${cat.amount.toFixed(0)}</span>
+            {hasIncomeThisWeek ? (
+              <>
+                <div className="flex justify-between items-end border-b pb-4 border-border">
+                  <div className="space-y-1">
+                    <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Remaining This Week</Label>
+                    <p className={`text-3xl font-bold font-display ${remainingThisWeek >= 0 ? 'text-success' : 'text-soft-red'}`}>
+                      ${Math.abs(remainingThisWeek).toFixed(2)}
+                      <span className="text-xs ml-1 font-bold">{remainingThisWeek >= 0 ? 'Left' : 'Over'}</span>
+                    </p>
+                  </div>
+                  <div className="text-right space-y-1">
+                    <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Spent</Label>
+                    <p className="text-lg font-bold font-mono text-foreground">${totalWeeklySpent.toFixed(2)}</p>
+                  </div>
                 </div>
-              ))}
-            </div>
+                {hasSpendingThisWeek ? (
+                  <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                    {[
+                      { label: "Groceries", amount: currentWeekLedgerSpending.filter(s => s.category === "Groceries").reduce((acc, s) => acc + parseFloat(s.amount), 0) },
+                      { label: "Gas / Fuel", amount: currentWeekLedgerSpending.filter(s => s.category === "Gas / Fuel").reduce((acc, s) => acc + parseFloat(s.amount), 0) },
+                      { label: "Personal", amount: currentWeekLedgerSpending.filter(s => ["Personal (Me)", "Personal (Spouse)"].includes(s.category || "")).reduce((acc, s) => acc + parseFloat(s.amount), 0) },
+                      { label: "Household", amount: currentWeekLedgerSpending.filter(s => s.category === "Household / Misc").reduce((acc, s) => acc + parseFloat(s.amount), 0) },
+                    ].filter(cat => cat.amount > 0).map((cat) => (
+                      <div key={cat.label} className="flex justify-between items-center">
+                        <span className="text-sm text-foreground font-medium">{cat.label}</span>
+                        <span className="text-sm font-bold font-mono text-gold">${cat.amount.toFixed(0)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-2">No spending logged this week yet</p>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-4 space-y-2">
+                <p className="text-sm text-muted-foreground">Log this week's income to see your spending margin</p>
+                <Button size="sm" variant="outline" onClick={() => setShowIncomeModal(true)} className="border-gold/50 text-gold">
+                  Log Income
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Balances Snapshot - Ledger-derived */}
+        {/* Balances Snapshot */}
         <Card className="border-border bg-card shadow-lg">
           <CardHeader className="pb-2 pt-4 px-4">
             <CardTitle className="text-xs font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
@@ -367,10 +428,9 @@ export default function Dashboard() {
             {(() => {
               const snapshotTypes = ["personal", "spouse", "joint"];
               const checkingAccounts = ledgerAccounts?.filter(a => snapshotTypes.includes(a.type)) || [];
-              // Exclude Bills Pool (excludeFromTotals=true), Tax Set-Aside, and Trading Funds from totals
-              const bucketAccounts = ledgerAccounts?.filter(a => 
-                a.type === "bucket" && 
-                !a.excludeFromTotals && 
+              const bucketAccounts = ledgerAccounts?.filter(a =>
+                a.type === "bucket" &&
+                !a.excludeFromTotals &&
                 !["Tax Set-Aside", "Trading Funds"].includes(a.name)
               ) || [];
               const taxesAccount = ledgerAccounts?.find(a => a.name === "Tax Set-Aside");
@@ -378,7 +438,6 @@ export default function Dashboard() {
               const totalChecking = checkingAccounts.reduce((acc, a) => acc + a.currentBalance, 0);
               const totalBuckets = bucketAccounts.reduce((acc, a) => acc + a.currentBalance, 0);
               const totalCash = totalChecking + totalBuckets;
-
               return (
                 <>
                   <div className="grid grid-cols-2 gap-2">
@@ -442,7 +501,6 @@ export default function Dashboard() {
             </CardDescription>
           </CardHeader>
           <CardContent className="p-5 space-y-5">
-            {/* Target Summary */}
             <div className="bg-secondary/30 rounded-xl p-4 space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Monthly Bills</span>
@@ -464,7 +522,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Log This Week's Transfers */}
             <div className="space-y-3">
               <div className="flex justify-between items-center">
                 <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">
@@ -482,7 +539,6 @@ export default function Dashboard() {
                   <div className="flex items-center gap-1">
                     <span className="text-muted-foreground text-sm">$</span>
                     <Input
-                      data-testid="input-bills-my-transfer"
                       type="number"
                       step="0.01"
                       value={billsMyTransfer}
@@ -497,7 +553,6 @@ export default function Dashboard() {
                   <div className="flex items-center gap-1">
                     <span className="text-muted-foreground text-sm">$</span>
                     <Input
-                      data-testid="input-bills-spouse-transfer"
                       type="number"
                       step="0.01"
                       value={billsSpouseTransfer}
@@ -510,7 +565,6 @@ export default function Dashboard() {
               </div>
               <div className="flex gap-2">
                 <Button
-                  data-testid="button-save-bills-funding"
                   size="sm"
                   className="flex-1"
                   onClick={handleSaveBillsFunding}
@@ -521,12 +575,11 @@ export default function Dashboard() {
                 </Button>
                 {currentWeekFunding && (
                   <Button
-                    data-testid="button-reset-bills-funding"
                     size="sm"
                     variant="outline"
                     className="border-destructive/50 text-destructive hover:bg-destructive/10"
                     onClick={() => {
-                      if (confirm("Reset this week's bills funding entry? This will also reverse the Bills Pool balance.")) {
+                      if (confirm("Reset this week's bills funding entry?")) {
                         deleteBillsFunding.mutate(currentWeekStartDate);
                       }
                     }}
@@ -538,7 +591,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Suggested vs Actual (if log exists) */}
             {currentWeekFunding && (
               <div className="bg-secondary/20 rounded-xl p-4 space-y-2">
                 <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Suggested vs Actual</Label>
@@ -567,7 +619,6 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* MTD Tracking */}
             <div className="border-t border-border pt-4 space-y-3">
               <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Month-to-Date</Label>
               <div className="grid grid-cols-3 gap-3 text-center">
@@ -604,28 +655,137 @@ export default function Dashboard() {
             <CardDescription className="text-muted-foreground text-xs uppercase tracking-widest font-bold">Monthly Margin Allocation</CardDescription>
           </CardHeader>
           <CardContent className="p-6 space-y-6">
-            <div className="space-y-4">
-              {[
-                { label: "Savings", amount: bucketSavings },
-                { label: "Investing", amount: bucketInvesting },
-                { label: "Debt + Buffer", amount: bucketDebt },
-                { label: "Trading", amount: bucketTrading },
-              ].map((bucket) => (
-                <div key={bucket.label} className="flex justify-between items-center">
-                  <Label className="text-xs font-bold text-muted-foreground uppercase tracking-widest">{bucket.label}</Label>
-                  <span className="text-sm font-bold font-mono text-foreground">${bucket.amount.toFixed(2)}</span>
+            {hasIncomeThisWeek ? (
+              <div className="space-y-4">
+                {[
+                  { label: "Savings", amount: bucketSavings },
+                  { label: "Investing", amount: bucketInvesting },
+                  { label: "Debt + Buffer", amount: bucketDebt },
+                  { label: "Trading", amount: bucketTrading },
+                ].map((bucket) => (
+                  <div key={bucket.label} className="flex justify-between items-center">
+                    <Label className="text-xs font-bold text-muted-foreground uppercase tracking-widest">{bucket.label}</Label>
+                    <span className="text-sm font-bold font-mono text-foreground">${bucket.amount.toFixed(2)}</span>
+                  </div>
+                ))}
+                <div className="pt-4 border-t border-border flex justify-between items-center">
+                  <span className="text-sm font-bold text-foreground">Total</span>
+                  <span className="text-lg font-bold font-mono text-gold">${totalAllocated.toFixed(2)}</span>
                 </div>
-              ))}
-              <div className="pt-4 border-t border-border flex justify-between items-center">
-                <span className="text-sm font-bold text-foreground">Total</span>
-                <span className="text-lg font-bold font-mono text-gold">
-                  ${totalAllocated.toFixed(2)}
-                </span>
               </div>
-            </div>
+            ) : (
+              <div className="text-center py-4 space-y-2">
+                <p className="text-sm text-muted-foreground">Log income to see your bucket allocations</p>
+                <Button size="sm" variant="outline" onClick={() => setShowIncomeModal(true)} className="border-gold/50 text-gold">
+                  Log Income
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
+
       </div>
+
+      {/* Floating Action Button */}
+      <button
+        onClick={() => setShowIncomeModal(true)}
+        className="fixed bottom-24 right-4 w-14 h-14 bg-gold rounded-full shadow-lg flex items-center justify-center z-40 hover:bg-gold/90 transition-all active:scale-95"
+      >
+        <Plus className="w-6 h-6 text-black" />
+      </button>
+
+      {/* Income Modal */}
+      {showIncomeModal && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-end justify-center">
+          <div className="bg-background border-t border-border rounded-t-2xl w-full max-w-md p-6 space-y-4 animate-in slide-in-from-bottom duration-300">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-foreground">Log Weekly Income</h2>
+              <button onClick={() => setShowIncomeModal(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">Week of {format(weekStartForModal, "MMM d, yyyy")}</p>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-xs text-muted-foreground uppercase tracking-widest">My Income</Label>
+                <div className="relative mt-1">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
+                  <Input
+                    type="number"
+                    value={incomeMyAmount}
+                    onChange={(e) => setIncomeMyAmount(e.target.value)}
+                    className="pl-7 bg-secondary border-border"
+                    placeholder="0"
+                    autoFocus
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground uppercase tracking-widest">Spouse Income</Label>
+                <div className="relative mt-1">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
+                  <Input
+                    type="number"
+                    value={incomeSpouseAmount}
+                    onChange={(e) => setIncomeSpouseAmount(e.target.value)}
+                    className="pl-7 bg-secondary border-border"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm text-foreground">Deposit to Accounts</Label>
+                <p className="text-xs text-muted-foreground">Add income to account balances</p>
+              </div>
+              <Switch checked={incomeDepositEnabled} onCheckedChange={setIncomeDepositEnabled} />
+            </div>
+
+            {incomeDepositEnabled && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-muted-foreground uppercase tracking-widest">My Deposit Into</Label>
+                  <Select value={myDepositAccountId} onValueChange={setMyDepositAccountId}>
+                    <SelectTrigger className="mt-1 bg-secondary border-border">
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {personalAccounts.map(a => (
+                        <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground uppercase tracking-widest">Spouse Deposit Into</Label>
+                  <Select value={spouseDepositAccountId} onValueChange={setSpouseDepositAccountId}>
+                    <SelectTrigger className="mt-1 bg-secondary border-border">
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {personalAccounts.map(a => (
+                        <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+
+            <Button
+              className="w-full bg-gold hover:bg-gold/90 text-black font-bold"
+              onClick={handleSaveIncome}
+              disabled={saveIncomeMutation.isPending}
+            >
+              {saveIncomeMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              Save & Deposit
+            </Button>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }
