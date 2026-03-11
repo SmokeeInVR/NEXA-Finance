@@ -810,7 +810,7 @@ export async function registerRoutes(
           },
           body: JSON.stringify({
             text: trimmed,
-            model_id: "eleven_monolingual_v1",
+            model_id: "eleven_turbo_v2_5",
             voice_settings: {
               stability: 0.4,        // slight variation = more natural
               similarity_boost: 0.85,
