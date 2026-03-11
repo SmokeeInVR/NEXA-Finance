@@ -1,19 +1,17 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, Briefcase, Settings2, Receipt, Wallet, TrendingUp } from "lucide-react";
+import { LayoutDashboard, Briefcase, Settings2, Receipt, Wallet, TrendingUp, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
-
 export function BottomNav() {
   const [location] = useLocation();
-
   const navItems = [
     { href: "/", icon: LayoutDashboard, label: "Home" },
     { href: "/spending", icon: Receipt, label: "Spend" },
     { href: "/accounts", icon: Wallet, label: "Accounts" },
     { href: "/invest", icon: TrendingUp, label: "Invest" },
+    { href: "/ai", icon: Brain, label: "AI" },
     { href: "/business", icon: Briefcase, label: "Biz" },
     { href: "/settings", icon: Settings2, label: "Settings" },
   ];
-
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-background border-t border-border pb-safe z-50">
       <div className="flex justify-around items-center h-16 max-w-md mx-auto px-2 overflow-x-auto no-scrollbar">
