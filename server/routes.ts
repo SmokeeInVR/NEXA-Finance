@@ -404,7 +404,7 @@ export async function registerRoutes(
       });
     } else {
       // No income logged for this week - carry forward most recent week
-      const mostRecent = logs[0]; // already ordered by desc date
+      const mostRecent = logs[0];
       if (mostRecent) {
         const myIncome = parseFloat(String(mostRecent.myIncome));
         const spouseIncome = parseFloat(String(mostRecent.spouseIncome));
@@ -475,9 +475,6 @@ export async function registerRoutes(
       // Save the log entry
       const log = await storage.upsertBillsFundingLog(input);
       
-      // Move money between accounts using delta-based transfers
-      // Delta approach: only transfer the difference when updating an existing entry
-      // This ensures that repeated edits don't cause duplicate transfers
       if (myDelta !== 0 || spouseDelta !== 0 || fundingDelta !== 0) {
         const accounts = await storage.getAccountsWithBalances();
         const personalChecking = accounts.find(a => a.name === "Personal Checking (Me)");
@@ -485,7 +482,6 @@ export async function registerRoutes(
         const jointChecking = accounts.find(a => a.name === "Joint Checking");
         const billsPool = accounts.find(a => a.name === "Bills Pool");
         
-        // Transfer My delta: Personal Checking ↔ Joint Checking
         if (myDelta !== 0 && personalChecking && jointChecking) {
           const fromId = myDelta > 0 ? personalChecking.id : jointChecking.id;
           const toId = myDelta > 0 ? jointChecking.id : personalChecking.id;
@@ -499,7 +495,6 @@ export async function registerRoutes(
           });
         }
         
-        // Transfer Spouse delta: Spouse Checking ↔ Joint Checking
         if (spouseDelta !== 0 && spouseChecking && jointChecking) {
           const fromId = spouseDelta > 0 ? spouseChecking.id : jointChecking.id;
           const toId = spouseDelta > 0 ? jointChecking.id : spouseChecking.id;
@@ -513,7 +508,6 @@ export async function registerRoutes(
           });
         }
         
-        // Update Bills Pool virtual tracker
         if (fundingDelta !== 0 && billsPool) {
           const newBillsBalance = parseFloat(billsPool.startingBalance || "0") + fundingDelta;
           await storage.updateAccount(billsPool.id, { startingBalance: newBillsBalance.toFixed(2) });
@@ -535,7 +529,6 @@ export async function registerRoutes(
     try {
       const weekStartDate = req.params.weekStartDate;
       
-      // Get the existing log to reverse all balance changes
       const logs = await storage.getBillsFundingLogs();
       const existingLog = logs.find(l => l.weekStartDate === weekStartDate);
       
@@ -550,7 +543,6 @@ export async function registerRoutes(
         const jointChecking = accounts.find(a => a.name === "Joint Checking");
         const billsPool = accounts.find(a => a.name === "Bills Pool");
         
-        // Reverse: move money back from Joint Checking to Personal/Spouse
         if (myAmount > 0 && personalChecking && jointChecking) {
           await storage.createTransfer({
             date: weekStartDate,
@@ -572,7 +564,6 @@ export async function registerRoutes(
           });
         }
         
-        // Reverse Bills Pool virtual tracker
         if (totalToRemove > 0 && billsPool) {
           const newBillsBalance = parseFloat(billsPool.startingBalance || "0") - totalToRemove;
           await storage.updateAccount(billsPool.id, { startingBalance: newBillsBalance.toFixed(2) });
@@ -714,7 +705,7 @@ export async function registerRoutes(
     const includeTrading = req.query.includeTrading === "true";
     const totalCash = await storage.computeTotalCash(includeTrading);
     res.json({ totalCash, includeTrading });
- });
+  });
 
   // === NEXA OS SUMMARY ENDPOINT ===
   app.get("/api/os/summary", async (_req, res) => {
@@ -760,7 +751,8 @@ export async function registerRoutes(
       res.status(500).json({ message: "Failed to generate OS summary" });
     }
   });
-// === AI PROXY ===
+
+  // === AI PROXY ===
   app.post("/api/ai/insights", async (req, res) => {
     try {
       const { prompt } = req.body;
@@ -784,6 +776,68 @@ export async function registerRoutes(
       res.status(500).json({ message: "AI request failed" });
     }
   });
-  
+
+  // === ELEVENLABS TTS PROXY ===
+  // Keeps the API key server-side, streams audio back to the client
+  // Voice: Adam (pNInz6obpgDQGcFmaJgB) — deep, clear, JARVIS-like
+  // To use a different voice, replace the voiceId below with any ID from:
+  // https://api.elevenlabs.io/v1/voices
+  app.post("/api/ai/speak", async (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text || typeof text !== "string") {
+        res.status(400).json({ message: "text is required" });
+        return;
+      }
+
+      const apiKey = process.env.ELEVENLABS_API_KEY;
+      if (!apiKey) {
+        res.status(500).json({ message: "ElevenLabs API key not configured" });
+        return;
+      }
+
+      // Trim text to 2500 chars to stay within free tier limits
+      const trimmed = text.slice(0, 2500);
+      const voiceId = "pNInz6obpgDQGcFmaJgB"; // Adam — deep & clear
+
+      const elevenRes = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "xi-api-key": apiKey,
+          },
+          body: JSON.stringify({
+            text: trimmed,
+            model_id: "eleven_monolingual_v1",
+            voice_settings: {
+              stability: 0.4,        // slight variation = more natural
+              similarity_boost: 0.85,
+              style: 0.2,
+              use_speaker_boost: true
+            }
+          })
+        }
+      );
+
+      if (!elevenRes.ok) {
+        const errText = await elevenRes.text();
+        console.error("ElevenLabs error:", elevenRes.status, errText);
+        res.status(elevenRes.status).json({ message: "ElevenLabs TTS failed", detail: errText });
+        return;
+      }
+
+      // Stream the mp3 audio back
+      const audioBuffer = await elevenRes.arrayBuffer();
+      res.set("Content-Type", "audio/mpeg");
+      res.set("Content-Length", String(audioBuffer.byteLength));
+      res.send(Buffer.from(audioBuffer));
+    } catch (err) {
+      console.error("TTS proxy error:", err);
+      res.status(500).json({ message: "TTS request failed" });
+    }
+  });
+
   return httpServer;
 }
