@@ -110,7 +110,8 @@ export default function AIInsights() {
       });
 
       const aiData = await aiRes.json();
-      const text = aiData.content?.[0]?.text || "No response received.";
+      console.log("AI response:", JSON.stringify(aiData));
+const text = aiData.content?.[0]?.text || aiData.message || JSON.stringify(aiData);
       setResponse(text);
     } catch (err) {
       setError("Failed to load insights. Please try again.");
