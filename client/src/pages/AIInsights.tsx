@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Layout } from "@/components/Layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Brain, Target, Sparkles, RefreshCw, DollarSign, CreditCard, PiggyBank } from "lucide-react";
+import { Brain, Target, Sparkles, RefreshCw, DollarSign, CreditCard, PiggyBank, Volume2, VolumeX } from "lucide-react";
 
 const RAILWAY_URL = import.meta.env.VITE_API_URL || "";
 
@@ -85,24 +85,107 @@ ${data.accounts?.filter((a: any) => !a.excludeFromTotals).map((a: any) => `  •
   return base + `\nProvide a comprehensive financial health summary and top 3 recommendations.`;
 }
 
+// Strip markdown for clean speech
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/#{1,3}\s/g, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/^[•\-]\s/gm, "")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, " ")
+    .trim();
+}
+
+// Animated speaking orb
+function SpeakingOrb({ speaking }: { speaking: boolean }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div
+          key={i}
+          className={`rounded-full bg-primary transition-all duration-150 ${
+            speaking ? "animate-pulse" : "opacity-30"
+          }`}
+          style={{
+            width: speaking ? "4px" : "3px",
+            height: speaking
+              ? `${[10, 18, 14, 20, 10][i]}px`
+              : "4px",
+            animationDelay: `${i * 80}ms`,
+            animationDuration: `${600 + i * 100}ms`,
+            transition: "height 0.2s ease",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function AIInsights() {
   const [activeInsight, setActiveInsight] = useState<InsightType | null>(null);
   const [response, setResponse] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [speaking, setSpeaking] = useState(false);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  // Stop speech on unmount
+  useEffect(() => {
+    return () => {
+      window.speechSynthesis?.cancel();
+    };
+  }, []);
+
+  const speak = useCallback((text: string) => {
+    if (!voiceEnabled || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+
+    const clean = stripMarkdown(text);
+    const utterance = new SpeechSynthesisUtterance(clean);
+    utteranceRef.current = utterance;
+
+    // Pick a natural voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v =>
+      v.name.includes("Google") || v.name.includes("Samantha") || v.name.includes("Alex")
+    );
+    if (preferred) utterance.voice = preferred;
+
+    utterance.rate = 0.95;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    utterance.onstart = () => setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+
+    setSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  }, [voiceEnabled]);
+
+  const stopSpeaking = () => {
+    window.speechSynthesis?.cancel();
+    setSpeaking(false);
+  };
+
+  const toggleVoice = () => {
+    if (speaking) stopSpeaking();
+    setVoiceEnabled(v => !v);
+  };
 
   async function runInsight(card: InsightCard) {
+    stopSpeaking();
     setActiveInsight(card.type);
     setResponse("");
     setError("");
     setLoading(true);
 
     try {
-      // Fetch live financial data
       const dataRes = await fetch(`${RAILWAY_URL}/api/os/summary`);
       const financialData = await dataRes.json();
 
-      // Call Claude via our secure backend proxy
       const aiRes = await fetch(`${RAILWAY_URL}/api/ai/insights`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -110,9 +193,14 @@ export default function AIInsights() {
       });
 
       const aiData = await aiRes.json();
-      console.log("AI response:", JSON.stringify(aiData));
-const text = aiData.content?.[0]?.text || aiData.message || JSON.stringify(aiData);
+      const text = aiData.content?.[0]?.text || aiData.message || JSON.stringify(aiData);
       setResponse(text);
+
+      // Auto-speak the response
+      if (voiceEnabled) {
+        // Small delay so voices are loaded
+        setTimeout(() => speak(text), 300);
+      }
     } catch (err) {
       setError("Failed to load insights. Please try again.");
     } finally {
@@ -125,11 +213,27 @@ const text = aiData.content?.[0]?.text || aiData.message || JSON.stringify(aiDat
   return (
     <Layout title="AI Insights">
       <div className="space-y-4">
-        <div className="flex items-center gap-2 mb-2">
-          <Brain className="w-5 h-5 text-primary" />
-          <p className="text-sm text-muted-foreground">
-            AI-powered analysis of your real financial data
-          </p>
+        {/* Header row with voice toggle */}
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Brain className="w-5 h-5 text-primary" />
+            <p className="text-sm text-muted-foreground">
+              AI-powered analysis of your real financial data
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleVoice}
+            className={`h-8 w-8 p-0 rounded-full transition-colors ${
+              voiceEnabled
+                ? "text-primary hover:bg-primary/10"
+                : "text-muted-foreground hover:bg-secondary"
+            }`}
+            title={voiceEnabled ? "Voice on — click to mute" : "Voice off — click to enable"}
+          >
+            {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </Button>
         </div>
 
         {/* Insight Cards */}
@@ -162,16 +266,39 @@ const text = aiData.content?.[0]?.text || aiData.message || JSON.stringify(aiDat
               <CardTitle className="text-sm flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-primary" />
                 {activeCard?.title}
-                {!loading && response && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="ml-auto h-6 px-2"
-                    onClick={() => activeCard && runInsight(activeCard)}
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                  </Button>
+
+                {/* Speaking indicator */}
+                {speaking && (
+                  <div className="ml-1">
+                    <SpeakingOrb speaking={speaking} />
+                  </div>
                 )}
+
+                <div className="ml-auto flex items-center gap-1">
+                  {/* Stop / replay voice button */}
+                  {response && voiceEnabled && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs text-muted-foreground hover:text-primary"
+                      onClick={() => speaking ? stopSpeaking() : speak(response)}
+                      title={speaking ? "Stop" : "Read aloud"}
+                    >
+                      {speaking ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                    </Button>
+                  )}
+                  {/* Refresh */}
+                  {!loading && response && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2"
+                      onClick={() => activeCard && runInsight(activeCard)}
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                    </Button>
+                  )}
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -185,17 +312,17 @@ const text = aiData.content?.[0]?.text || aiData.message || JSON.stringify(aiDat
                 <p className="text-sm text-destructive">{error}</p>
               )}
               {response && (
-  <div className="text-sm text-foreground leading-relaxed space-y-2">
-    {response.split("\n").map((line, i) => {
-      if (line.startsWith("### ")) return <h3 key={i} className="font-bold text-primary text-sm mt-3">{line.replace(/###\s/, "")}</h3>;
-      if (line.startsWith("## ")) return <h2 key={i} className="font-bold text-foreground text-base mt-4">{line.replace(/##\s/, "")}</h2>;
-      if (line.startsWith("# ")) return <h1 key={i} className="font-bold text-foreground text-lg mt-4">{line.replace(/#\s/, "")}</h1>;
-      if (line.startsWith("• ") || line.startsWith("- ")) return <div key={i} className="flex gap-2 ml-2"><span className="text-primary mt-0.5">•</span><span dangerouslySetInnerHTML={{__html: line.replace(/^[•\-]\s/, "").replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}} /></div>;
-      if (line.trim() === "") return <div key={i} className="h-1" />;
-      return <p key={i} dangerouslySetInnerHTML={{__html: line.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}} />;
-    })}
-  </div>
-)}
+                <div className="text-sm text-foreground leading-relaxed space-y-2">
+                  {response.split("\n").map((line, i) => {
+                    if (line.startsWith("### ")) return <h3 key={i} className="font-bold text-primary text-sm mt-3">{line.replace(/###\s/, "")}</h3>;
+                    if (line.startsWith("## ")) return <h2 key={i} className="font-bold text-foreground text-base mt-4">{line.replace(/##\s/, "")}</h2>;
+                    if (line.startsWith("# ")) return <h1 key={i} className="font-bold text-foreground text-lg mt-4">{line.replace(/#\s/, "")}</h1>;
+                    if (line.startsWith("• ") || line.startsWith("- ")) return <div key={i} className="flex gap-2 ml-2"><span className="text-primary mt-0.5">•</span><span dangerouslySetInnerHTML={{__html: line.replace(/^[•\-]\s/, "").replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}} /></div>;
+                    if (line.trim() === "") return <div key={i} className="h-1" />;
+                    return <p key={i} dangerouslySetInnerHTML={{__html: line.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}} />;
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
