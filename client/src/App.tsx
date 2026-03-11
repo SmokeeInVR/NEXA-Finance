@@ -10,7 +10,7 @@ import Spending from "@/pages/Spending";
 import Accounts from "@/pages/Accounts";
 import SettingsPage from "@/pages/SettingsPage";
 import Invest from "@/pages/Invest";
-
+import AIInsights from "@/pages/AIInsights";
 function Router() {
   return (
     <Switch>
@@ -19,12 +19,12 @@ function Router() {
       <Route path="/accounts" component={Accounts} />
       <Route path="/business" component={Business} />
       <Route path="/invest" component={Invest} />
+      <Route path="/ai" component={AIInsights} />
       <Route path="/settings" component={SettingsPage} />
       <Route component={NotFound} />
     </Switch>
   );
 }
-
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -35,5 +35,4 @@ function App() {
     </QueryClientProvider>
   );
 }
-
 export default App;
