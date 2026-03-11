@@ -54,6 +54,7 @@ import {
   DollarSign,
   MinusCircle,
   Target,
+  Pencil,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 
@@ -328,6 +329,7 @@ function BalancesTab() {
         </CardContent>
       </Card>
 
+      {/* Bank Accounts Card */}
       <Card className="border-border bg-card shadow-lg">
         <CardHeader className="pb-3 border-b border-border bg-secondary/20">
           <CardTitle className="text-lg flex items-center gap-2 text-gold">
@@ -346,7 +348,6 @@ function BalancesTab() {
               <div className="flex items-center justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-foreground truncate">{account.name}</p>
-                  <p className="text-[10px] text-muted-foreground">Tap balance to edit</p>
                 </div>
                 <div className="text-right">
                   {editingBalance?.id === account.id ? (
@@ -372,15 +373,27 @@ function BalancesTab() {
                       </Button>
                     </div>
                   ) : (
-                    <p 
-                      className={`text-xl font-bold font-mono cursor-pointer hover:underline ${account.currentBalance >= 0 ? "text-gold" : "text-destructive"}`}
-                      onClick={() => setEditingBalance({ id: account.id, value: account.currentBalance.toFixed(2) })}
-                      data-testid={`text-balance-${account.id}`}
-                    >
-                      ${account.currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </p>
+                    <div className="flex items-center gap-2 justify-end">
+                      <div>
+                        <p 
+                          className={`text-xl font-bold font-mono cursor-pointer ${account.currentBalance >= 0 ? "text-gold" : "text-destructive"}`}
+                          onClick={() => setEditingBalance({ id: account.id, value: account.currentBalance.toFixed(2) })}
+                          data-testid={`text-balance-${account.id}`}
+                        >
+                          ${account.currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">Current Balance</p>
+                      </div>
+                      <button
+                        onClick={() => setEditingBalance({ id: account.id, value: account.currentBalance.toFixed(2) })}
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-gold hover:bg-gold/10 transition-colors"
+                        data-testid={`btn-edit-${account.id}`}
+                        title="Edit balance"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   )}
-                  <p className="text-[10px] text-muted-foreground">Current Balance</p>
                 </div>
               </div>
             </div>
@@ -388,6 +401,7 @@ function BalancesTab() {
         </CardContent>
       </Card>
 
+      {/* Buckets & Set-Asides Card */}
       <Card className="border-border bg-card shadow-lg">
         <CardHeader className="pb-3 border-b border-border bg-secondary/20">
           <CardTitle className="text-lg flex items-center gap-2 text-gold">
@@ -406,7 +420,6 @@ function BalancesTab() {
               <div className="flex items-center justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-foreground truncate">{account.name}</p>
-                  <p className="text-[10px] text-muted-foreground">Tap balance to edit</p>
                 </div>
                 <div className="text-right">
                   {editingBalance?.id === account.id ? (
@@ -432,13 +445,25 @@ function BalancesTab() {
                       </Button>
                     </div>
                   ) : (
-                    <p 
-                      className={`text-xl font-bold font-mono cursor-pointer hover:underline ${account.currentBalance >= 0 ? "text-gold" : "text-destructive"}`}
-                      onClick={() => setEditingBalance({ id: account.id, value: account.currentBalance.toFixed(2) })}
-                      data-testid={`text-bucket-${account.id}`}
-                    >
-                      ${account.currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </p>
+                    <div className="flex items-center gap-2 justify-end">
+                      <div>
+                        <p 
+                          className={`text-xl font-bold font-mono cursor-pointer ${account.currentBalance >= 0 ? "text-gold" : "text-destructive"}`}
+                          onClick={() => setEditingBalance({ id: account.id, value: account.currentBalance.toFixed(2) })}
+                          data-testid={`text-bucket-${account.id}`}
+                        >
+                          ${account.currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setEditingBalance({ id: account.id, value: account.currentBalance.toFixed(2) })}
+                        className="p-1.5 rounded-lg text-muted-foreground hover:text-gold hover:bg-gold/10 transition-colors"
+                        data-testid={`btn-edit-bucket-${account.id}`}
+                        title="Edit balance"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -447,6 +472,7 @@ function BalancesTab() {
         </CardContent>
       </Card>
 
+      {/* Totals Row */}
       <div className="grid grid-cols-2 gap-4">
         <Card className="border-border bg-card shadow-lg">
           <CardContent className="p-4">
@@ -466,6 +492,7 @@ function BalancesTab() {
         </Card>
       </div>
 
+      {/* Buffer Goal Tracker */}
       <Card className="border-border bg-card shadow-lg">
         <CardHeader className="pb-3 border-b border-border bg-secondary/20">
           <CardTitle className="text-lg flex items-center gap-2 text-gold">
@@ -510,7 +537,6 @@ function BalancesTab() {
           </div>
         </CardContent>
       </Card>
-
     </div>
   );
 }
