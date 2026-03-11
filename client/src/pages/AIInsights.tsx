@@ -85,7 +85,7 @@ ${data.accounts?.filter((a: any) => !a.excludeFromTotals).map((a: any) => `  •
   return base + `\nProvide a comprehensive financial health summary and top 3 recommendations.`;
 }
 
-// Strip markdown so ElevenLabs reads naturally
+// Strip markdown for clean speech
 function stripMarkdown(text: string): string {
   return text
     .replace(/#{1,3}\s/g, "")
@@ -133,65 +133,49 @@ export default function AIInsights() {
   const [error, setError] = useState<string>("");
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [speaking, setSpeaking] = useState(false);
-  const [loadingVoice, setLoadingVoice] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
+  // Stop speech on unmount
   useEffect(() => {
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
+      window.speechSynthesis?.cancel();
     };
   }, []);
 
   const stopSpeaking = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = "";
-      audioRef.current = null;
-    }
+    window.speechSynthesis?.cancel();
     setSpeaking(false);
-    setLoadingVoice(false);
   }, []);
 
-  const speak = useCallback(async (text: string) => {
-    if (!voiceEnabled) return;
+  const speak = useCallback((text: string) => {
+    if (!voiceEnabled || !window.speechSynthesis) return;
     stopSpeaking();
-    setLoadingVoice(true);
 
-    try {
-      const clean = stripMarkdown(text);
-      const res = await fetch(`${RAILWAY_URL}/api/ai/speak`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: clean })
-      });
+    const clean = stripMarkdown(text);
+    const utterance = new SpeechSynthesisUtterance(clean);
+    utteranceRef.current = utterance;
 
-      if (!res.ok) {
-        console.error("TTS failed:", res.status);
-        setLoadingVoice(false);
-        return;
-      }
+    // Pick the best available voice
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v =>
+      v.name.includes("Google") || v.name.includes("Samantha") || v.name.includes("Alex")
+    );
+    if (preferred) utterance.voice = preferred;
 
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioRef.current = audio;
+    utterance.rate = 0.95;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
 
-      audio.onplay = () => { setSpeaking(true); setLoadingVoice(false); };
-      audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setSpeaking(false); setLoadingVoice(false); };
+    utterance.onstart = () => setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
 
-      await audio.play();
-    } catch (err) {
-      console.error("TTS error:", err);
-      setLoadingVoice(false);
-    }
+    setSpeaking(true);
+    window.speechSynthesis.speak(utterance);
   }, [voiceEnabled, stopSpeaking]);
 
   const toggleVoice = () => {
-    if (speaking || loadingVoice) stopSpeaking();
+    if (speaking) stopSpeaking();
     setVoiceEnabled(v => !v);
   };
 
@@ -217,7 +201,7 @@ export default function AIInsights() {
       setResponse(text);
 
       if (voiceEnabled) {
-        speak(text);
+        setTimeout(() => speak(text), 300);
       }
     } catch (err) {
       setError("Failed to load insights. Please try again.");
@@ -285,12 +269,10 @@ export default function AIInsights() {
                 <Sparkles className="w-4 h-4 text-primary" />
                 {activeCard?.title}
 
-                {(speaking || loadingVoice) && (
-                  <div className="ml-1 flex items-center gap-1.5">
-                    {loadingVoice && !speaking
-                      ? <span className="text-[10px] text-muted-foreground animate-pulse">loading voice...</span>
-                      : <SpeakingOrb speaking={speaking} />
-                    }
+                {/* Speaking indicator */}
+                {speaking && (
+                  <div className="ml-1">
+                    <SpeakingOrb speaking={speaking} />
                   </div>
                 )}
 
@@ -300,13 +282,10 @@ export default function AIInsights() {
                       variant="ghost"
                       size="sm"
                       className="h-6 px-2 text-xs text-muted-foreground hover:text-primary"
-                      onClick={() => (speaking || loadingVoice) ? stopSpeaking() : speak(response)}
-                      title={(speaking || loadingVoice) ? "Stop" : "Read aloud"}
+                      onClick={() => speaking ? stopSpeaking() : speak(response)}
+                      title={speaking ? "Stop" : "Read aloud"}
                     >
-                      {(speaking || loadingVoice)
-                        ? <VolumeX className="w-3 h-3" />
-                        : <Volume2 className="w-3 h-3" />
-                      }
+                      {speaking ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
                     </Button>
                   )}
                   {!loading && response && (
