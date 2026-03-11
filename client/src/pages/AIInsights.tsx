@@ -85,7 +85,7 @@ ${data.accounts?.filter((a: any) => !a.excludeFromTotals).map((a: any) => `  •
   return base + `\nProvide a comprehensive financial health summary and top 3 recommendations.`;
 }
 
-// Strip markdown for clean speech
+// Strip markdown so ElevenLabs reads naturally
 function stripMarkdown(text: string): string {
   return text
     .replace(/#{1,3}\s/g, "")
@@ -97,27 +97,31 @@ function stripMarkdown(text: string): string {
     .trim();
 }
 
-// Animated speaking orb
+// Animated JARVIS-style speaking bars
 function SpeakingOrb({ speaking }: { speaking: boolean }) {
+  const heights = [8, 16, 12, 20, 14, 18, 10];
   return (
-    <div className="flex items-center gap-1.5">
-      {[0, 1, 2, 3, 4].map((i) => (
+    <div className="flex items-center gap-[3px]" aria-label="Speaking">
+      {heights.map((h, i) => (
         <div
           key={i}
-          className={`rounded-full bg-primary transition-all duration-150 ${
-            speaking ? "animate-pulse" : "opacity-30"
-          }`}
+          className="rounded-full bg-primary"
           style={{
-            width: speaking ? "4px" : "3px",
-            height: speaking
-              ? `${[10, 18, 14, 20, 10][i]}px`
-              : "4px",
-            animationDelay: `${i * 80}ms`,
-            animationDuration: `${600 + i * 100}ms`,
-            transition: "height 0.2s ease",
+            width: "3px",
+            height: speaking ? `${h}px` : "3px",
+            opacity: speaking ? 0.9 : 0.3,
+            transition: `height ${200 + i * 40}ms ease-in-out, opacity 200ms ease`,
+            animation: speaking ? `speakPulse ${600 + i * 80}ms ease-in-out infinite alternate` : "none",
+            animationDelay: `${i * 60}ms`,
           }}
         />
       ))}
+      <style>{`
+        @keyframes speakPulse {
+          from { transform: scaleY(0.4); }
+          to   { transform: scaleY(1.3); }
+        }
+      `}</style>
     </div>
   );
 }
@@ -129,49 +133,65 @@ export default function AIInsights() {
   const [error, setError] = useState<string>("");
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [speaking, setSpeaking] = useState(false);
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const [loadingVoice, setLoadingVoice] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Stop speech on unmount
   useEffect(() => {
     return () => {
-      window.speechSynthesis?.cancel();
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
     };
   }, []);
 
-  const speak = useCallback((text: string) => {
-    if (!voiceEnabled || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-
-    const clean = stripMarkdown(text);
-    const utterance = new SpeechSynthesisUtterance(clean);
-    utteranceRef.current = utterance;
-
-    // Pick a natural voice if available
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v =>
-      v.name.includes("Google") || v.name.includes("Samantha") || v.name.includes("Alex")
-    );
-    if (preferred) utterance.voice = preferred;
-
-    utterance.rate = 0.95;
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
-
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = () => setSpeaking(false);
-
-    setSpeaking(true);
-    window.speechSynthesis.speak(utterance);
-  }, [voiceEnabled]);
-
-  const stopSpeaking = () => {
-    window.speechSynthesis?.cancel();
+  const stopSpeaking = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current = null;
+    }
     setSpeaking(false);
-  };
+    setLoadingVoice(false);
+  }, []);
+
+  const speak = useCallback(async (text: string) => {
+    if (!voiceEnabled) return;
+    stopSpeaking();
+    setLoadingVoice(true);
+
+    try {
+      const clean = stripMarkdown(text);
+      const res = await fetch(`${RAILWAY_URL}/api/ai/speak`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: clean })
+      });
+
+      if (!res.ok) {
+        console.error("TTS failed:", res.status);
+        setLoadingVoice(false);
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onplay = () => { setSpeaking(true); setLoadingVoice(false); };
+      audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setSpeaking(false); setLoadingVoice(false); };
+
+      await audio.play();
+    } catch (err) {
+      console.error("TTS error:", err);
+      setLoadingVoice(false);
+    }
+  }, [voiceEnabled, stopSpeaking]);
 
   const toggleVoice = () => {
-    if (speaking) stopSpeaking();
+    if (speaking || loadingVoice) stopSpeaking();
     setVoiceEnabled(v => !v);
   };
 
@@ -196,10 +216,8 @@ export default function AIInsights() {
       const text = aiData.content?.[0]?.text || aiData.message || JSON.stringify(aiData);
       setResponse(text);
 
-      // Auto-speak the response
       if (voiceEnabled) {
-        // Small delay so voices are loaded
-        setTimeout(() => speak(text), 300);
+        speak(text);
       }
     } catch (err) {
       setError("Failed to load insights. Please try again.");
@@ -213,7 +231,7 @@ export default function AIInsights() {
   return (
     <Layout title="AI Insights">
       <div className="space-y-4">
-        {/* Header row with voice toggle */}
+        {/* Header */}
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <Brain className="w-5 h-5 text-primary" />
@@ -267,27 +285,30 @@ export default function AIInsights() {
                 <Sparkles className="w-4 h-4 text-primary" />
                 {activeCard?.title}
 
-                {/* Speaking indicator */}
-                {speaking && (
-                  <div className="ml-1">
-                    <SpeakingOrb speaking={speaking} />
+                {(speaking || loadingVoice) && (
+                  <div className="ml-1 flex items-center gap-1.5">
+                    {loadingVoice && !speaking
+                      ? <span className="text-[10px] text-muted-foreground animate-pulse">loading voice...</span>
+                      : <SpeakingOrb speaking={speaking} />
+                    }
                   </div>
                 )}
 
                 <div className="ml-auto flex items-center gap-1">
-                  {/* Stop / replay voice button */}
                   {response && voiceEnabled && (
                     <Button
                       variant="ghost"
                       size="sm"
                       className="h-6 px-2 text-xs text-muted-foreground hover:text-primary"
-                      onClick={() => speaking ? stopSpeaking() : speak(response)}
-                      title={speaking ? "Stop" : "Read aloud"}
+                      onClick={() => (speaking || loadingVoice) ? stopSpeaking() : speak(response)}
+                      title={(speaking || loadingVoice) ? "Stop" : "Read aloud"}
                     >
-                      {speaking ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
+                      {(speaking || loadingVoice)
+                        ? <VolumeX className="w-3 h-3" />
+                        : <Volume2 className="w-3 h-3" />
+                      }
                     </Button>
                   )}
-                  {/* Refresh */}
                   {!loading && response && (
                     <Button
                       variant="ghost"
@@ -308,9 +329,7 @@ export default function AIInsights() {
                   Analyzing your financial data...
                 </div>
               )}
-              {error && (
-                <p className="text-sm text-destructive">{error}</p>
-              )}
+              {error && <p className="text-sm text-destructive">{error}</p>}
               {response && (
                 <div className="text-sm text-foreground leading-relaxed space-y-2">
                   {response.split("\n").map((line, i) => {
