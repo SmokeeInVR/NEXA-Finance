@@ -185,10 +185,17 @@ const text = aiData.content?.[0]?.text || aiData.message || JSON.stringify(aiDat
                 <p className="text-sm text-destructive">{error}</p>
               )}
               {response && (
-                <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
-                  {response}
-                </div>
-              )}
+  <div className="text-sm text-foreground leading-relaxed space-y-2">
+    {response.split("\n").map((line, i) => {
+      if (line.startsWith("### ")) return <h3 key={i} className="font-bold text-primary text-sm mt-3">{line.replace(/###\s/, "")}</h3>;
+      if (line.startsWith("## ")) return <h2 key={i} className="font-bold text-foreground text-base mt-4">{line.replace(/##\s/, "")}</h2>;
+      if (line.startsWith("# ")) return <h1 key={i} className="font-bold text-foreground text-lg mt-4">{line.replace(/#\s/, "")}</h1>;
+      if (line.startsWith("• ") || line.startsWith("- ")) return <div key={i} className="flex gap-2 ml-2"><span className="text-primary mt-0.5">•</span><span dangerouslySetInnerHTML={{__html: line.replace(/^[•\-]\s/, "").replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}} /></div>;
+      if (line.trim() === "") return <div key={i} className="h-1" />;
+      return <p key={i} dangerouslySetInnerHTML={{__html: line.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}} />;
+    })}
+  </div>
+)}
             </CardContent>
           </Card>
         )}
