@@ -23,7 +23,7 @@ import {
   Plus, Trash2, DollarSign, Receipt, Car, TrendingUp, 
   Loader2, Calculator, ChevronDown, ChevronUp, PiggyBank, ArrowRight
 } from "lucide-react";
-import { format, startOfMonth, subDays, startOfYear, parseISO, isWithinInterval } from "date-fns";
+import { format, startOfMonth, subDays, startOfYear, parseISO, isWithinInterval, subMonths, getMonth, getYear } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -33,6 +33,16 @@ import {
   FormItem,
   FormLabel,
 } from "@/components/ui/form";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Legend,
+} from "recharts";
 
 function usePeriodTotals(items: { date: string; amount?: string | number; miles?: string | number | null }[] | undefined, field: 'amount' | 'miles') {
   return useMemo(() => {
@@ -55,7 +65,61 @@ function usePeriodTotals(items: { date: string; amount?: string | number; miles?
   }, [items, field]);
 }
 
-// Compact summary header
+// Build last 6 months of income vs expenses data for chart
+function useMonthlyChartData(
+  income: { date: string; amount?: string | number }[] | undefined,
+  expenses: { date: string; amount?: string | number }[] | undefined
+) {
+  return useMemo(() => {
+    const now = new Date();
+    const months = Array.from({ length: 6 }, (_, i) => {
+      const d = subMonths(now, 5 - i);
+      return {
+        label: format(d, "MMM"),
+        month: getMonth(d),
+        year: getYear(d),
+        income: 0,
+        expenses: 0,
+      };
+    });
+
+    income?.forEach(item => {
+      const d = parseISO(item.date);
+      const m = months.find(x => x.month === getMonth(d) && x.year === getYear(d));
+      if (m) m.income += parseFloat(String(item.amount || 0));
+    });
+
+    expenses?.forEach(item => {
+      const d = parseISO(item.date);
+      const m = months.find(x => x.month === getMonth(d) && x.year === getYear(d));
+      if (m) m.expenses += parseFloat(String(item.amount || 0));
+    });
+
+    return months.map(m => ({
+      label: m.label,
+      Income: Math.round(m.income),
+      Expenses: Math.round(m.expenses),
+      Net: Math.round(m.income - m.expenses),
+    }));
+  }, [income, expenses]);
+}
+
+// Custom tooltip for the chart
+function CustomTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="bg-card border border-border rounded-lg p-2 text-xs shadow-lg">
+      <p className="font-bold text-foreground mb-1">{label}</p>
+      {payload.map((p: any) => (
+        <p key={p.name} style={{ color: p.color }} className="font-mono">
+          {p.name}: ${p.value.toLocaleString()}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+// Summary header — now shows net profit too
 function SummaryHeader({ incomeTotals, expenseTotals, estimatedTax }: { 
   incomeTotals: { ytd: number }; 
   expenseTotals: { ytd: number }; 
@@ -66,11 +130,21 @@ function SummaryHeader({ incomeTotals, expenseTotals, estimatedTax }: {
     <div className="grid grid-cols-2 gap-2 mb-4">
       <div className="bg-success/10 rounded-lg p-3 border border-success/20">
         <p className="text-[9px] font-bold uppercase text-muted-foreground">Income YTD</p>
-        <p data-testid="glance-income-ytd" className="text-lg font-bold font-mono text-success">${incomeTotals.ytd.toLocaleString()}</p>
+        <p data-testid="glance-income-ytd" className="text-lg font-bold font-mono text-success">${incomeTotals.ytd.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
       </div>
       <div className="bg-amber-500/10 rounded-lg p-3 border border-amber-500/20">
         <p className="text-[9px] font-bold uppercase text-muted-foreground">Est. Taxes</p>
-        <p data-testid="glance-taxes-ytd" className="text-lg font-bold font-mono text-amber-500">${estimatedTax.toLocaleString()}</p>
+        <p data-testid="glance-taxes-ytd" className="text-lg font-bold font-mono text-amber-500">${estimatedTax.toLocaleString(undefined, { minimumFractionDigits: 3 })}</p>
+      </div>
+      <div className="bg-destructive/10 rounded-lg p-3 border border-destructive/20">
+        <p className="text-[9px] font-bold uppercase text-muted-foreground">Expenses YTD</p>
+        <p className="text-lg font-bold font-mono text-destructive">${expenseTotals.ytd.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+      </div>
+      <div className={`rounded-lg p-3 border ${net >= 0 ? "bg-success/10 border-success/20" : "bg-destructive/10 border-destructive/20"}`}>
+        <p className="text-[9px] font-bold uppercase text-muted-foreground">Net Profit</p>
+        <p className={`text-lg font-bold font-mono ${net >= 0 ? "text-success" : "text-destructive"}`}>
+          ${net.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+        </p>
       </div>
     </div>
   );
@@ -414,6 +488,7 @@ export default function Business() {
   const incomeTotals = usePeriodTotals(income, 'amount');
   const expenseTotals = usePeriodTotals(expenses, 'amount');
   const mileageTotals = usePeriodTotals(mileage, 'miles');
+  const monthlyChartData = useMonthlyChartData(income, expenses);
   
   const taxPercent = parseFloat(settings?.taxHoldPercent || "25");
   const estimatedTax = incomeTotals.ytd * (taxPercent / 100);
@@ -467,10 +542,53 @@ export default function Business() {
     );
   };
 
+  // Check if there's any chart data worth showing
+  const hasChartData = monthlyChartData.some(d => d.Income > 0 || d.Expenses > 0);
+
   return (
     <Layout title="Business">
       <div className="space-y-3">
         <SummaryHeader incomeTotals={incomeTotals} expenseTotals={expenseTotals} estimatedTax={estimatedTax} />
+
+        {/* Monthly Overview Chart */}
+        {hasChartData && (
+          <Card className="border-border">
+            <CardContent className="p-3">
+              <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">6-Month Overview</p>
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={monthlyChartData} barCategoryGap="20%" barGap={2}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                  <XAxis 
+                    dataKey="label" 
+                    tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} 
+                    axisLine={false} 
+                    tickLine={false} 
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))" }} 
+                    axisLine={false} 
+                    tickLine={false}
+                    tickFormatter={(v) => `$${v >= 1000 ? `${(v/1000).toFixed(0)}k` : v}`}
+                    width={36}
+                  />
+                  <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
+                  <Bar dataKey="Income" fill="hsl(var(--success))" radius={[3, 3, 0, 0]} opacity={0.85} />
+                  <Bar dataKey="Expenses" fill="hsl(var(--destructive))" radius={[3, 3, 0, 0]} opacity={0.85} />
+                </BarChart>
+              </ResponsiveContainer>
+              <div className="flex items-center justify-center gap-4 mt-1">
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-sm bg-success opacity-85" />
+                  <span className="text-[10px] text-muted-foreground">Income</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-sm bg-destructive opacity-85" />
+                  <span className="text-[10px] text-muted-foreground">Expenses</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Tax Progress */}
         <Card className="border-border">
