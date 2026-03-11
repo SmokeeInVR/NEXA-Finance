@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Layout } from "@/components/Layout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Brain, TrendingDown, Target, Sparkles, RefreshCw, DollarSign, CreditCard, PiggyBank } from "lucide-react";
+import { Brain, Target, Sparkles, RefreshCw, DollarSign, CreditCard, PiggyBank } from "lucide-react";
 
 const RAILWAY_URL = import.meta.env.VITE_API_URL || "";
 
@@ -102,20 +102,11 @@ export default function AIInsights() {
       const dataRes = await fetch(`${RAILWAY_URL}/api/os/summary`);
       const financialData = await dataRes.json();
 
-      // Call Claude API
-      const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+      // Call Claude via our secure backend proxy
+      const aiRes = await fetch(`${RAILWAY_URL}/api/ai/insights`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content: buildPrompt(card.prompt, financialData)
-            }
-          ]
-        })
+        body: JSON.stringify({ prompt: buildPrompt(card.prompt, financialData) })
       });
 
       const aiData = await aiRes.json();
