@@ -8,10 +8,11 @@ const httpServer = createServer(app);
 // ── CORS — allow Nexa OS (Vercel) to call this API ──
 app.use((req, res, next) => {
   const allowed = [
-    "https://nexa-command-git-main-marcelgovan-3238s-projects.vercel.app",
-    "http://localhost:5000",
-    "http://localhost:3000",
-  ];
+  "https://nexa-command.vercel.app",
+  "https://nexa-command-git-main-marcelgovan-3238s-projects.vercel.app",
+  "http://localhost:5000",
+  "http://localhost:3000",
+];
   const origin = req.headers.origin || "";
   if (allowed.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
