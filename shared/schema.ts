@@ -195,6 +195,16 @@ export const transfers = pgTable("transfers", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// === Campaign Data (Nexa OS quest system — syncs across devices) ===
+export const campaignData = pgTable("campaign_data", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(), // always 'main' for now
+  value: text("value").notNull(), // JSON blob
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type CampaignData = typeof campaignData.$inferSelect;
+
 // === Bill Schedule ===
 export const billSchedule = pgTable("bill_schedule", {
   id: serial("id").primaryKey(),
