@@ -4,7 +4,7 @@ import {
   weeklyIncomeLogs, accountBalances, spendingLogs,
   businessIncomeLogs, businessSettings, billsFundingLogs,
   accounts, transactions, investmentSettings, transfers,
-  weeklyCashSnapshots, billSchedule,
+  weeklyCashSnapshots, billSchedule, campaignData,
   type InsertBudgetSettings, type BudgetSettings,
   type InsertDebt, type Debt,
   type InsertBusinessExpense, type BusinessExpense,
@@ -21,6 +21,7 @@ import {
   type InsertTransfer, type Transfer,
   type InsertWeeklyCashSnapshot, type WeeklyCashSnapshot,
   type InsertBillScheduleItem, type BillScheduleItem,
+  type CampaignData,
 } from "@shared/schema";
 import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
 
@@ -116,6 +117,10 @@ export interface IStorage {
   createBillScheduleItem(data: InsertBillScheduleItem): Promise<BillScheduleItem>;
   updateBillScheduleItem(id: number, data: Partial<InsertBillScheduleItem>): Promise<BillScheduleItem>;
   deleteBillScheduleItem(id: number): Promise<void>;
+
+  // Campaign Data (Nexa OS sync)
+  getCampaign(): Promise<any | null>;
+  saveCampaign(data: any): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -595,6 +600,27 @@ export class DatabaseStorage implements IStorage {
 
   async deleteBillScheduleItem(id: number): Promise<void> {
     await db.delete(billSchedule).where(eq(billSchedule.id, id));
+  }
+
+  // === CAMPAIGN DATA ===
+
+  async getCampaign(): Promise<any | null> {
+    try {
+      const [row] = await db.select().from(campaignData).where(eq(campaignData.key, "main"));
+      return row ? JSON.parse(row.value) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveCampaign(data: any): Promise<void> {
+    const value = JSON.stringify(data);
+    const existing = await db.select().from(campaignData).where(eq(campaignData.key, "main"));
+    if (existing.length > 0) {
+      await db.update(campaignData).set({ value, updatedAt: new Date() }).where(eq(campaignData.key, "main"));
+    } else {
+      await db.insert(campaignData).values({ key: "main", value });
+    }
   }
 }
 
