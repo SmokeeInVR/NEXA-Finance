@@ -697,7 +697,7 @@ export default function Dashboard() {
       {/* Income Modal */}
       {showIncomeModal && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-end justify-center">
-          <div className="bg-background border-t border-border rounded-t-2xl w-full max-w-md p-6 space-y-4 animate-in slide-in-from-bottom duration-300">
+          <div className="bg-background border-t border-border rounded-t-2xl w-full max-w-md p-6 space-y-4 animate-in slide-in-from-bottom duration-300 max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-foreground">Log Weekly Income</h2>
               <button onClick={() => setShowIncomeModal(false)} className="text-muted-foreground hover:text-foreground">
