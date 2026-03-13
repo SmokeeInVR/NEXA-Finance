@@ -16,7 +16,7 @@ import { Loader2, TrendingUp, Wallet, ArrowRightLeft, PieChart, Save, Receipt, D
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { startOfWeek, endOfWeek, isWithinInterval, startOfMonth, format, differenceInCalendarWeeks } from "date-fns";
+import { startOfWeek, endOfWeek, isWithinInterval, startOfMonth, format, differenceInCalendarWeeks, addWeeks } from "date-fns";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function Dashboard() {
@@ -76,6 +76,31 @@ export default function Dashboard() {
   const [billsMyTransfer, setBillsMyTransfer] = useState("");
   const [billsSpouseTransfer, setBillsSpouseTransfer] = useState("");
   const [billsNote, setBillsNote] = useState("");
+
+  // === BILLS FUNDING WEEK SELECTOR ===
+  // Build list of Week 1–4 for the current month
+  const today = new Date();
+  const monthStart = startOfMonth(today);
+  const firstMondayOfMonth = startOfWeek(monthStart, { weekStartsOn: 1 });
+  const adjustedFirstMonday = firstMondayOfMonth < monthStart
+    ? new Date(firstMondayOfMonth.getTime() + 7 * 24 * 60 * 60 * 1000)
+    : firstMondayOfMonth;
+
+  const monthWeeks = Array.from({ length: 4 }, (_, i) => {
+    const weekStart = addWeeks(adjustedFirstMonday, i);
+    return {
+      label: `Week ${i + 1} — ${format(weekStart, "MMM d")}`,
+      value: format(weekStart, "yyyy-MM-dd"),
+    };
+  });
+
+  const currentWeekStart = startOfWeek(today, { weekStartsOn: 1 });
+  const currentWeekStartStr = format(currentWeekStart, "yyyy-MM-dd");
+
+  // Default selected week = current week (or closest past week in monthWeeks)
+  const defaultBillsWeek = monthWeeks.find(w => w.value === currentWeekStartStr)?.value
+    ?? monthWeeks[monthWeeks.length - 1].value;
+  const [selectedBillsWeek, setSelectedBillsWeek] = useState(defaultBillsWeek);
 
   // === INCOME MODAL STATE ===
   const [showIncomeModal, setShowIncomeModal] = useState(false);
@@ -200,19 +225,20 @@ export default function Dashboard() {
     }
   }, [settings, form]);
 
-  const weekStartForFunding = startOfWeek(new Date(), { weekStartsOn: 1 });
-  const currentWeekStartDateForFunding = format(weekStartForFunding, "yyyy-MM-dd");
-  const currentWeekFundingData = billsFundingLogs?.find(l => l.weekStartDate === currentWeekStartDateForFunding);
+  // === BILLS FUNDING: use selectedBillsWeek instead of hardcoded current week ===
+  const selectedWeekFundingData = billsFundingLogs?.find(l => l.weekStartDate === selectedBillsWeek);
 
   useEffect(() => {
-    if (currentWeekFundingData) {
-      if (billsMyTransfer === "" && billsSpouseTransfer === "") {
-        setBillsMyTransfer(currentWeekFundingData.myTransfer);
-        setBillsSpouseTransfer(currentWeekFundingData.spouseTransfer);
-        setBillsNote(currentWeekFundingData.note || "");
-      }
+    if (selectedWeekFundingData) {
+      setBillsMyTransfer(selectedWeekFundingData.myTransfer);
+      setBillsSpouseTransfer(selectedWeekFundingData.spouseTransfer);
+      setBillsNote(selectedWeekFundingData.note || "");
+    } else {
+      setBillsMyTransfer("");
+      setBillsSpouseTransfer("");
+      setBillsNote("");
     }
-  }, [currentWeekFundingData]);
+  }, [selectedBillsWeek, selectedWeekFundingData?.weekStartDate]);
 
   // Pre-select deposit accounts when modal opens
   useEffect(() => {
@@ -251,54 +277,66 @@ export default function Dashboard() {
   const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
   const weekEnd = endOfWeek(new Date(), { weekStartsOn: 1 });
   const currentWeekStartDate = format(weekStart, "yyyy-MM-dd");
-  const monthStart = startOfMonth(new Date());
-  const currentWeekFunding = currentWeekFundingData;
 
-  const actualWeeklyContributions = currentWeekFunding
-    ? parseFloat(currentWeekFunding.myTransfer) + parseFloat(currentWeekFunding.spouseTransfer)
-    : 0;
-
+  // === FIX: Weekly spending is income minus actual spending ONLY ===
+  // Bills funding is a separate tracker — don't subtract it from spending margin
   const currentWeekLedgerSpending = (ledgerTransactions || [])
     .filter(tx => tx.type === "spend" && isWithinInterval(new Date(tx.date), { start: weekStart, end: weekEnd }));
   const totalWeeklySpent = currentWeekLedgerSpending.reduce((acc, tx) => acc + parseFloat(tx.amount), 0);
   const hasSpendingThisWeek = totalWeeklySpent > 0 || currentWeekLedgerSpending.length > 0;
-  const remainingThisWeek = totalWeeklyIncome - actualWeeklyContributions - totalWeeklySpent;
 
-  const today = new Date();
-  const currentWeekStart = startOfWeek(today, { weekStartsOn: 1 });
-  const firstMondayOfMonth = startOfWeek(monthStart, { weekStartsOn: 1 });
-  const adjustedFirstMonday = firstMondayOfMonth < monthStart
-    ? new Date(firstMondayOfMonth.getTime() + 7 * 24 * 60 * 60 * 1000)
-    : firstMondayOfMonth;
-  const weeksElapsedThisMonth = currentWeekStart >= adjustedFirstMonday
-    ? Math.max(1, differenceInCalendarWeeks(currentWeekStart, adjustedFirstMonday, { weekStartsOn: 1 }) + 1)
+  // Remaining = income minus spending only (bills contributions are separate)
+  const remainingThisWeek = totalWeeklyIncome - totalWeeklySpent;
+
+  // === FIX: Weekly margin = income minus weekly bills target (not what was actually transferred) ===
+  // This shows true margin after bills obligation, regardless of what was logged
+  const currentWeekFunding = billsFundingLogs?.find(l => l.weekStartDate === currentWeekStartDate);
+  const actualWeeklyContributions = currentWeekFunding
+    ? parseFloat(currentWeekFunding.myTransfer) + parseFloat(currentWeekFunding.spouseTransfer)
     : 0;
+
+  // Shortfall tracking: how much behind are we vs the weekly target
+  const weeklyBillsObligation = weeklyFixed; // what we SHOULD put in per week
+  const weeklyContributionShortfall = actualWeeklyContributions > 0
+    ? Math.max(0, weeklyBillsObligation - actualWeeklyContributions)
+    : 0;
+
+  // True weekly margin = income minus the weekly bills obligation
+  const weeklyMargin = totalWeeklyIncome - weeklyBillsObligation;
+  const monthlyMargin = weeklyMargin * 4.33;
+
+  // MTD bills tracking
   const adjustedFirstMondayStr = format(adjustedFirstMonday, "yyyy-MM-dd");
-  const currentWeekStartStr = format(currentWeekStart, "yyyy-MM-dd");
+  const currentWeekStart2 = startOfWeek(today, { weekStartsOn: 1 });
+  const currentWeekStart2Str = format(currentWeekStart2, "yyyy-MM-dd");
   const mtdLogs = (billsFundingLogs || []).filter(l => {
-    return l.weekStartDate >= adjustedFirstMondayStr && l.weekStartDate <= currentWeekStartStr;
+    return l.weekStartDate >= adjustedFirstMondayStr && l.weekStartDate <= currentWeekStart2Str;
   });
+  const weeksElapsedThisMonth = currentWeekStart2 >= adjustedFirstMonday
+    ? Math.max(1, differenceInCalendarWeeks(currentWeekStart2, adjustedFirstMonday, { weekStartsOn: 1 }) + 1)
+    : 0;
   const mtdTarget = weeklyFixed * weeksElapsedThisMonth;
   const mtdFunded = mtdLogs.reduce((acc, l) => acc + parseFloat(l.myTransfer) + parseFloat(l.spouseTransfer), 0);
   const mtdDifference = mtdFunded - mtdTarget;
   const logsThisMonth = mtdLogs.length;
 
+  // Carry-over shortfall: total unfunded amount across all logged weeks
+  const mtdShortfall = Math.max(0, mtdTarget - mtdFunded);
+
   const myWeeklyTarget = weeklyFixed * (activeMyPct / 100);
   const spouseWeeklyTarget = weeklyFixed * (activeSpousePct / 100);
-  const currentMyActual = currentWeekFunding ? parseFloat(currentWeekFunding.myTransfer) : parseFloat(billsMyTransfer || "0");
-  const currentSpouseActual = currentWeekFunding ? parseFloat(currentWeekFunding.spouseTransfer) : parseFloat(billsSpouseTransfer || "0");
+  const currentMyActual = selectedWeekFundingData ? parseFloat(selectedWeekFundingData.myTransfer) : parseFloat(billsMyTransfer || "0");
+  const currentSpouseActual = selectedWeekFundingData ? parseFloat(selectedWeekFundingData.spouseTransfer) : parseFloat(billsSpouseTransfer || "0");
 
   const handleSaveBillsFunding = async () => {
     saveBillsFunding.mutate({
-      weekStartDate: currentWeekStartDate,
+      weekStartDate: selectedBillsWeek,
       myTransfer: billsMyTransfer || "0",
       spouseTransfer: billsSpouseTransfer || "0",
       note: billsNote || undefined,
     });
   };
 
-  const weeklyMargin = totalWeeklyIncome - actualWeeklyContributions;
-  const monthlyMargin = weeklyMargin * 4.33;
   const allocationFrequency = (form.watch("allocationFrequency") as "MONTHLY" | "WEEKLY") || "MONTHLY";
   const allocatable = allocationFrequency === "MONTHLY" ? monthlyMargin : weeklyMargin;
 
@@ -354,9 +392,14 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent className="p-4 pt-0">
               {hasIncomeThisWeek ? (
-                <div className={`text-2xl font-bold font-display tracking-tight ${weeklyMargin >= 0 ? 'text-success' : 'text-soft-red'}`}>
-                  ${weeklyMargin.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </div>
+                <>
+                  <div className={`text-2xl font-bold font-display tracking-tight ${weeklyMargin >= 0 ? 'text-success' : 'text-soft-red'}`}>
+                    ${weeklyMargin < 0 ? '-' : ''}${Math.abs(weeklyMargin).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </div>
+                  {weeklyMargin < 0 && (
+                    <p className="text-[10px] text-soft-red uppercase tracking-widest mt-1">Short this week</p>
+                  )}
+                </>
               ) : (
                 <p className="text-sm text-muted-foreground">—</p>
               )}
@@ -382,6 +425,12 @@ export default function Dashboard() {
                       ${Math.abs(remainingThisWeek).toFixed(2)}
                       <span className="text-xs ml-1 font-bold">{remainingThisWeek >= 0 ? 'Left' : 'Over'}</span>
                     </p>
+                    {/* Shortfall carry-over alert */}
+                    {mtdShortfall > 0 && (
+                      <p className="text-[10px] text-amber-400 font-bold uppercase tracking-widest mt-1">
+                        ⚠ ${mtdShortfall.toFixed(0)} catch-up needed on bills
+                      </p>
+                    )}
                   </div>
                   <div className="text-right space-y-1">
                     <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Spent</Label>
@@ -523,11 +572,29 @@ export default function Dashboard() {
             </div>
 
             <div className="space-y-3">
+              {/* === WEEK SELECTOR === */}
+              <div className="space-y-1">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Log Week</Label>
+                <Select value={selectedBillsWeek} onValueChange={setSelectedBillsWeek}>
+                  <SelectTrigger className="bg-secondary border-border">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {monthWeeks.map(w => (
+                      <SelectItem key={w.value} value={w.value}>
+                        {w.label}
+                        {billsFundingLogs?.find(l => l.weekStartDate === w.value) ? " ✓" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
               <div className="flex justify-between items-center">
                 <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">
-                  Log Week of {format(weekStart, "MMM d")}
+                  Transfers
                 </Label>
-                {currentWeekFunding && (
+                {selectedWeekFundingData && (
                   <span className="text-[10px] uppercase font-bold text-success flex items-center gap-1">
                     <Check className="w-3 h-3" /> Logged
                   </span>
@@ -571,16 +638,16 @@ export default function Dashboard() {
                   disabled={saveBillsFunding.isPending}
                 >
                   {saveBillsFunding.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Save className="w-4 h-4 mr-1" />}
-                  {currentWeekFunding ? "Update" : "Save"}
+                  {selectedWeekFundingData ? "Update" : "Save"}
                 </Button>
-                {currentWeekFunding && (
+                {selectedWeekFundingData && (
                   <Button
                     size="sm"
                     variant="outline"
                     className="border-destructive/50 text-destructive hover:bg-destructive/10"
                     onClick={() => {
                       if (confirm("Reset this week's bills funding entry?")) {
-                        deleteBillsFunding.mutate(currentWeekStartDate);
+                        deleteBillsFunding.mutate(selectedBillsWeek);
                       }
                     }}
                     disabled={deleteBillsFunding.isPending}
@@ -591,7 +658,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {currentWeekFunding && (
+            {selectedWeekFundingData && (
               <div className="bg-secondary/20 rounded-xl p-4 space-y-2">
                 <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Suggested vs Actual</Label>
                 <div className="grid grid-cols-2 gap-4 text-sm">
@@ -639,6 +706,13 @@ export default function Dashboard() {
                   </p>
                 </div>
               </div>
+              {mtdShortfall > 0 && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-center">
+                  <p className="text-[10px] text-amber-400 uppercase tracking-widest font-bold">Catch-up needed</p>
+                  <p className="text-sm font-bold font-mono text-amber-400">${mtdShortfall.toFixed(2)}</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Add to next week's transfer to stay on track</p>
+                </div>
+              )}
               <p className="text-[10px] text-muted-foreground text-center">
                 {logsThisMonth} of {weeksElapsedThisMonth} week{weeksElapsedThisMonth !== 1 ? "s" : ""} logged
               </p>
@@ -697,7 +771,7 @@ export default function Dashboard() {
       {/* Income Modal */}
       {showIncomeModal && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-end justify-center overflow-hidden">
-  <div className="bg-background border-t border-border rounded-t-2xl w-full max-w-md px-6 pt-6 pb-24 space-y-4 animate-in slide-in-from-bottom duration-300 max-h-[85vh] overflow-y-auto overscroll-contain">
+          <div className="bg-background border-t border-border rounded-t-2xl w-full max-w-md px-6 pt-6 pb-24 space-y-4 animate-in slide-in-from-bottom duration-300 max-h-[85vh] overflow-y-auto overscroll-contain">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-foreground">Log Weekly Income</h2>
               <button onClick={() => setShowIncomeModal(false)} className="text-muted-foreground hover:text-foreground">
