@@ -237,8 +237,6 @@ export default function Dashboard() {
   const totalWeeklySpent = currentWeekLedgerSpending.reduce((acc, tx) => acc + parseFloat(tx.amount), 0);
   const hasSpendingThisWeek = totalWeeklySpent > 0 || currentWeekLedgerSpending.length > 0;
   const remainingThisWeek = totalWeeklyIncome - totalWeeklySpent;
-  // True free money = remaining minus any bills catch-up owed
-  const trueFreeThisWeek = remainingThisWeek - mtdShortfall;
 
   const currentWeekFunding = billsFundingLogs?.find(l => l.weekStartDate === currentWeekStartDate);
   const weeklyBillsObligation = weeklyFixed;
@@ -258,6 +256,8 @@ export default function Dashboard() {
   const mtdDifference = mtdFunded - mtdTarget;
   const logsThisMonth = mtdLogs.length;
   const mtdShortfall = Math.max(0, mtdTarget - mtdFunded);
+  // True free money = what's left after spending AND bills catch-up obligation
+  const trueFreeThisWeek = remainingThisWeek - mtdShortfall;
 
   const myWeeklyTarget = weeklyFixed * (activeMyPct / 100);
   const spouseWeeklyTarget = weeklyFixed * (activeSpousePct / 100);
