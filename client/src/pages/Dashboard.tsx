@@ -237,6 +237,8 @@ export default function Dashboard() {
   const totalWeeklySpent = currentWeekLedgerSpending.reduce((acc, tx) => acc + parseFloat(tx.amount), 0);
   const hasSpendingThisWeek = totalWeeklySpent > 0 || currentWeekLedgerSpending.length > 0;
   const remainingThisWeek = totalWeeklyIncome - totalWeeklySpent;
+  // True free money = remaining minus any bills catch-up owed
+  const trueFreeThisWeek = remainingThisWeek - mtdShortfall;
 
   const currentWeekFunding = billsFundingLogs?.find(l => l.weekStartDate === currentWeekStartDate);
   const weeklyBillsObligation = weeklyFixed;
@@ -348,23 +350,47 @@ export default function Dashboard() {
           <CardContent className="p-6 space-y-6">
             {hasIncomeThisWeek ? (
               <>
-                <div className="flex justify-between items-end border-b pb-4 border-border">
-                  <div className="space-y-1">
-                    <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Remaining This Week</Label>
-                    <p className={`text-3xl font-bold font-display ${remainingThisWeek >= 0 ? "text-success" : "text-soft-red"}`}>
-                      ${Math.abs(remainingThisWeek).toFixed(2)}
-                      <span className="text-xs ml-1 font-bold">{remainingThisWeek >= 0 ? "Left" : "Over"}</span>
-                    </p>
-                    {mtdShortfall > 0 && (
-                      <p className="text-[10px] text-amber-400 font-bold uppercase tracking-widest mt-1">
-                        ⚠ ${mtdShortfall.toFixed(0)} catch-up needed on bills
+                <div className="border-b pb-4 border-border space-y-3">
+                  {/* True free money — the honest number */}
+                  <div className="flex justify-between items-end">
+                    <div className="space-y-1">
+                      <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">
+                        {mtdShortfall > 0 ? "Actually Free This Week" : "Remaining This Week"}
+                      </Label>
+                      <p className={`text-3xl font-bold font-display ${trueFreeThisWeek > 0 ? "text-success" : "text-soft-red"}`}>
+                        {trueFreeThisWeek < 0 ? "-" : ""}${Math.abs(trueFreeThisWeek).toFixed(2)}
+                        <span className="text-xs ml-1 font-bold">{trueFreeThisWeek >= 0 ? "Free" : "Short"}</span>
                       </p>
-                    )}
+                    </div>
+                    <div className="text-right space-y-1">
+                      <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Spent</Label>
+                      <p className="text-lg font-bold font-mono text-foreground">${totalWeeklySpent.toFixed(2)}</p>
+                    </div>
                   </div>
-                  <div className="text-right space-y-1">
-                    <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Spent</Label>
-                    <p className="text-lg font-bold font-mono text-foreground">${totalWeeklySpent.toFixed(2)}</p>
-                  </div>
+
+                  {/* Breakdown — only shows when there's a shortfall */}
+                  {mtdShortfall > 0 && (
+                    <div className="bg-secondary/40 rounded-lg p-3 space-y-1.5">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Income this week</span>
+                        <span className="font-mono font-bold text-foreground">${totalWeeklyIncome.toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Already spent</span>
+                        <span className="font-mono text-foreground">−${totalWeeklySpent.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs border-t border-border pt-1.5">
+                        <span className="text-amber-400 font-bold">Bills catch-up owed</span>
+                        <span className="font-mono font-bold text-amber-400">−${mtdShortfall.toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs border-t border-border pt-1.5">
+                        <span className="font-bold text-foreground">Actually free</span>
+                        <span className={`font-mono font-bold ${trueFreeThisWeek >= 0 ? "text-success" : "text-soft-red"}`}>
+                          {trueFreeThisWeek < 0 ? "-" : ""}${Math.abs(trueFreeThisWeek).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {hasSpendingThisWeek ? (
                   <div className="grid grid-cols-2 gap-x-8 gap-y-4">
