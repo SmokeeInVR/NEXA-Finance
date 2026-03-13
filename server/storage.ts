@@ -4,7 +4,7 @@ import {
   weeklyIncomeLogs, accountBalances, spendingLogs,
   businessIncomeLogs, businessSettings, billsFundingLogs,
   accounts, transactions, investmentSettings, transfers,
-  weeklyCashSnapshots,
+  weeklyCashSnapshots, billSchedule,
   type InsertBudgetSettings, type BudgetSettings,
   type InsertDebt, type Debt,
   type InsertBusinessExpense, type BusinessExpense,
@@ -19,7 +19,8 @@ import {
   type InsertTransaction, type Transaction,
   type InsertInvestmentSettings, type InvestmentSettings,
   type InsertTransfer, type Transfer,
-  type InsertWeeklyCashSnapshot, type WeeklyCashSnapshot
+  type InsertWeeklyCashSnapshot, type WeeklyCashSnapshot,
+  type InsertBillScheduleItem, type BillScheduleItem,
 } from "@shared/schema";
 import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
 
@@ -50,7 +51,7 @@ export interface IStorage {
   getBudgetSettings(): Promise<BudgetSettings | undefined>;
   updateBudgetSettings(settings: InsertBudgetSettings): Promise<BudgetSettings>;
 
-  // Spending (Legacy - kept for backward compatibility)
+  // Spending
   getSpendingLogs(): Promise<SpendingLog[]>;
   createSpendingLog(log: InsertSpendingLog): Promise<SpendingLog>;
   deleteSpendingLog(id: number): Promise<void>;
@@ -72,7 +73,7 @@ export interface IStorage {
   createMileageEntry(entry: InsertMileageEntry): Promise<MileageEntry>;
   deleteMileageEntry(id: number): Promise<void>;
 
-  // Weekly Income Log (Legacy)
+  // Weekly Income Log
   getWeeklyIncomeLogs(): Promise<WeeklyIncomeLog[]>;
   upsertWeeklyIncomeLog(log: InsertWeeklyIncomeLog): Promise<WeeklyIncomeLog>;
   deleteWeeklyIncomeLog(id: number): Promise<void>;
@@ -90,7 +91,7 @@ export interface IStorage {
   getBusinessSettings(): Promise<BusinessSettings | undefined>;
   updateBusinessSettings(settings: InsertBusinessSettings): Promise<BusinessSettings>;
 
-  // Bills Funding (Legacy - now using transactions)
+  // Bills Funding
   getBillsFundingLogs(): Promise<BillsFundingLog[]>;
   upsertBillsFundingLog(log: InsertBillsFundingLog): Promise<BillsFundingLog>;
   deleteBillsFundingLog(weekStartDate: string): Promise<boolean>;
@@ -107,16 +108,18 @@ export interface IStorage {
   getWeeklyCashSnapshot(weekStartDate: string): Promise<WeeklyCashSnapshot | undefined>;
   upsertWeeklyCashSnapshot(snapshot: InsertWeeklyCashSnapshot): Promise<WeeklyCashSnapshot>;
   deleteWeeklyCashSnapshot(weekStartDate: string): Promise<void>;
-  
-  // Compute total current cash
   computeTotalCash(includeTrading?: boolean): Promise<number>;
-  
-  // Migration: Mark Bills Pool as excluded from totals
   markBillsPoolAsExcluded(): Promise<void>;
+
+  // Bill Schedule
+  getBillSchedule(): Promise<BillScheduleItem[]>;
+  createBillScheduleItem(data: InsertBillScheduleItem): Promise<BillScheduleItem>;
+  updateBillScheduleItem(id: number, data: Partial<InsertBillScheduleItem>): Promise<BillScheduleItem>;
+  deleteBillScheduleItem(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
-  // === ACCOUNTS (LEDGER SYSTEM) ===
+  // === ACCOUNTS ===
   
   async getAccounts(): Promise<Account[]> {
     return await db.select().from(accounts).orderBy(accounts.name);
@@ -125,15 +128,10 @@ export class DatabaseStorage implements IStorage {
   async getAccountsWithBalances(): Promise<AccountWithBalance[]> {
     const allAccounts = await this.getAccounts();
     const accountsWithBalances: AccountWithBalance[] = [];
-    
     for (const account of allAccounts) {
       const currentBalance = await this.getAccountBalance(account.id);
-      accountsWithBalances.push({
-        ...account,
-        currentBalance
-      });
+      accountsWithBalances.push({ ...account, currentBalance });
     }
-    
     return accountsWithBalances;
   }
 
@@ -162,48 +160,37 @@ export class DatabaseStorage implements IStorage {
   async seedDefaultAccounts(): Promise<Account[]> {
     const existing = await this.getAccounts();
     if (existing.length > 0) return existing;
-    
     const defaultAccounts: InsertAccount[] = [
       { name: "Personal Checking (Me)", type: "personal", startingBalance: "0" },
       { name: "Spouse Checking", type: "spouse", startingBalance: "0" },
       { name: "Joint Checking", type: "joint", startingBalance: "0" },
       { name: "Savings", type: "joint", startingBalance: "0" },
-      { name: "Bills Pool", type: "bucket", startingBalance: "0", excludeFromTotals: true }, // Bills Pool excluded - Joint Checking is source of truth
+      { name: "Bills Pool", type: "bucket", startingBalance: "0", excludeFromTotals: true },
       { name: "Emergency Buffer", type: "bucket", startingBalance: "0" },
       { name: "Trading Funds", type: "bucket", startingBalance: "0" },
       { name: "Business Checking", type: "business", startingBalance: "0" },
       { name: "Tax Set-Aside", type: "bucket", startingBalance: "0" },
     ];
-    
     const created = await db.insert(accounts).values(defaultAccounts).returning();
     return created;
   }
 
-  // === TRANSACTIONS (CORE LEDGER) ===
-  
+  // === TRANSACTIONS ===
+
   async getTransactions(options?: { startDate?: string; endDate?: string; type?: string; accountId?: number }): Promise<Transaction[]> {
     let query = db.select().from(transactions);
-    
     const conditions = [];
-    if (options?.startDate) {
-      conditions.push(gte(transactions.date, options.startDate));
-    }
-    if (options?.endDate) {
-      conditions.push(lte(transactions.date, options.endDate));
-    }
-    if (options?.type) {
-      conditions.push(eq(transactions.type, options.type));
-    }
+    if (options?.startDate) conditions.push(gte(transactions.date, options.startDate));
+    if (options?.endDate) conditions.push(lte(transactions.date, options.endDate));
+    if (options?.type) conditions.push(eq(transactions.type, options.type));
     if (options?.accountId) {
       conditions.push(
         sql`(${transactions.fromAccountId} = ${options.accountId} OR ${transactions.toAccountId} = ${options.accountId})`
       );
     }
-    
     if (conditions.length > 0) {
       query = query.where(and(...conditions)) as any;
     }
-    
     return await query.orderBy(desc(transactions.date));
   }
 
@@ -228,73 +215,50 @@ export class DatabaseStorage implements IStorage {
   async getAccountBalance(accountId: number): Promise<number> {
     const account = await this.getAccountById(accountId);
     if (!account) return 0;
-    
     const startingBalance = parseFloat(account.startingBalance || "0");
-    
-    // Sum of incoming transactions (to_account_id = accountId)
     const [incoming] = await db.select({
       total: sql<string>`COALESCE(SUM(CAST(${transactions.amount} AS DECIMAL)), 0)`
     }).from(transactions).where(eq(transactions.toAccountId, accountId));
-    
-    // Sum of outgoing transactions (from_account_id = accountId)
     const [outgoing] = await db.select({
       total: sql<string>`COALESCE(SUM(CAST(${transactions.amount} AS DECIMAL)), 0)`
     }).from(transactions).where(eq(transactions.fromAccountId, accountId));
-    
-    const incomingTotal = parseFloat(incoming?.total || "0");
-    const outgoingTotal = parseFloat(outgoing?.total || "0");
-    
-    return startingBalance + incomingTotal - outgoingTotal;
+    return startingBalance + parseFloat(incoming?.total || "0") - parseFloat(outgoing?.total || "0");
   }
 
   async getWeeklyIncomeFromTransactions(weekStartDate: string, weekEndDate: string): Promise<{ myIncome: number; spouseIncome: number; total: number }> {
-    // Get income transactions for the week
     const incomeTransactions = await db.select().from(transactions)
       .where(and(
         eq(transactions.type, "income"),
         gte(transactions.date, weekStartDate),
         lte(transactions.date, weekEndDate)
       ));
-    
     let myIncome = 0;
     let spouseIncome = 0;
-    
     for (const tx of incomeTransactions) {
       const amount = parseFloat(tx.amount);
-      if (tx.createdBy === "Me") {
-        myIncome += amount;
-      } else if (tx.createdBy === "Spouse") {
-        spouseIncome += amount;
-      }
+      if (tx.createdBy === "Me") myIncome += amount;
+      else if (tx.createdBy === "Spouse") spouseIncome += amount;
     }
-    
     return { myIncome, spouseIncome, total: myIncome + spouseIncome };
   }
 
-  // === DEBTS WITH PAYMENTS ===
-  
+  // === DEBTS ===
+
   async getDebtsWithPayments(): Promise<(Debt & { totalPaid: number; remainingBalance: number })[]> {
     const allDebts = await this.getDebts();
     const debtsWithPayments = [];
-    
     for (const debt of allDebts) {
       const payments = await this.getTransactionsByDebtId(debt.id);
       const totalPaid = payments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
       const startingBalance = parseFloat(debt.startingBalance || debt.balance);
       const remainingBalance = startingBalance - totalPaid;
-      
-      debtsWithPayments.push({
-        ...debt,
-        totalPaid,
-        remainingBalance: Math.max(0, remainingBalance)
-      });
+      debtsWithPayments.push({ ...debt, totalPaid, remainingBalance: Math.max(0, remainingBalance) });
     }
-    
     return debtsWithPayments;
   }
 
   // === BUDGET SETTINGS ===
-  
+
   async getBudgetSettings(): Promise<BudgetSettings | undefined> {
     const [settings] = await db.select().from(budgetSettings).limit(1);
     return settings;
@@ -303,31 +267,27 @@ export class DatabaseStorage implements IStorage {
   async updateBudgetSettings(settings: InsertBudgetSettings): Promise<BudgetSettings> {
     const existing = await this.getBudgetSettings();
     if (existing) {
-      const [updated] = await db
-        .update(budgetSettings)
-        .set({ 
-          ...settings, 
-          splitMode: settings.splitMode || existing.splitMode,
-          mySplitPct: settings.mySplitPct || existing.mySplitPct,
-          spouseSplitPct: settings.spouseSplitPct || existing.spouseSplitPct,
-          savingsMode: settings.savingsMode || existing.savingsMode,
-          savingsValue: settings.savingsValue || existing.savingsValue,
-          investingMode: settings.investingMode || existing.investingMode,
-          investingValue: settings.investingValue || existing.investingValue,
-          debtBufferMode: settings.debtBufferMode || existing.debtBufferMode,
-          debtBufferValue: settings.debtBufferValue || existing.debtBufferValue,
-          tradingMode: settings.tradingMode || existing.tradingMode,
-          tradingValue: settings.tradingValue || existing.tradingValue,
-          allocationFrequency: settings.allocationFrequency || existing.allocationFrequency,
-          incomeSource: settings.incomeSource || existing.incomeSource,
-          avgWindowWeeks: settings.avgWindowWeeks ?? existing.avgWindowWeeks,
-          bufferGoalAmount: String(settings.bufferGoalAmount) || existing.bufferGoalAmount,
-          bufferRerouteEnabled: settings.bufferRerouteEnabled ?? existing.bufferRerouteEnabled,
-          rerouteTarget: settings.rerouteTarget || existing.rerouteTarget,
-          updatedAt: new Date() 
-        })
-        .where(eq(budgetSettings.id, existing.id))
-        .returning();
+      const [updated] = await db.update(budgetSettings).set({ 
+        ...settings, 
+        splitMode: settings.splitMode || existing.splitMode,
+        mySplitPct: settings.mySplitPct || existing.mySplitPct,
+        spouseSplitPct: settings.spouseSplitPct || existing.spouseSplitPct,
+        savingsMode: settings.savingsMode || existing.savingsMode,
+        savingsValue: settings.savingsValue || existing.savingsValue,
+        investingMode: settings.investingMode || existing.investingMode,
+        investingValue: settings.investingValue || existing.investingValue,
+        debtBufferMode: settings.debtBufferMode || existing.debtBufferMode,
+        debtBufferValue: settings.debtBufferValue || existing.debtBufferValue,
+        tradingMode: settings.tradingMode || existing.tradingMode,
+        tradingValue: settings.tradingValue || existing.tradingValue,
+        allocationFrequency: settings.allocationFrequency || existing.allocationFrequency,
+        incomeSource: settings.incomeSource || existing.incomeSource,
+        avgWindowWeeks: settings.avgWindowWeeks ?? existing.avgWindowWeeks,
+        bufferGoalAmount: String(settings.bufferGoalAmount) || existing.bufferGoalAmount,
+        bufferRerouteEnabled: settings.bufferRerouteEnabled ?? existing.bufferRerouteEnabled,
+        rerouteTarget: settings.rerouteTarget || existing.rerouteTarget,
+        updatedAt: new Date() 
+      }).where(eq(budgetSettings.id, existing.id)).returning();
       return updated;
     } else {
       const [created] = await db.insert(budgetSettings).values({
@@ -353,12 +313,9 @@ export class DatabaseStorage implements IStorage {
 
   async getDebts(): Promise<Debt[]> {
     const allDebts = await db.select().from(debts).orderBy(desc(debts.createdAt));
-    // Backfill startingBalance for existing debts that don't have it
     for (const debt of allDebts) {
       if (debt.startingBalance === null) {
-        await db.update(debts)
-          .set({ startingBalance: debt.balance })
-          .where(eq(debts.id, debt.id));
+        await db.update(debts).set({ startingBalance: debt.balance }).where(eq(debts.id, debt.id));
         debt.startingBalance = debt.balance;
       }
     }
@@ -366,19 +323,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createDebt(debt: InsertDebt): Promise<Debt> {
-    // Set startingBalance to initial balance on create
-    const [created] = await db.insert(debts).values({
-      ...debt,
-      startingBalance: debt.balance,
-    }).returning();
+    const [created] = await db.insert(debts).values({ ...debt, startingBalance: debt.balance }).returning();
     return created;
   }
 
   async updateDebt(id: number, balance: string): Promise<Debt> {
-    const [updated] = await db.update(debts)
-      .set({ balance })
-      .where(eq(debts.id, id))
-      .returning();
+    const [updated] = await db.update(debts).set({ balance }).where(eq(debts.id, id)).returning();
     return updated;
   }
 
@@ -426,7 +376,7 @@ export class DatabaseStorage implements IStorage {
           myIncome: log.myIncome,
           spouseIncome: log.spouseIncome,
           notes: log.notes,
-          createdAt: new Date() // Force refresh for "latest" logic
+          createdAt: new Date()
         }).where(eq(weeklyIncomeLogs.id, existing.id)).returning();
         return updated;
       }
@@ -463,7 +413,10 @@ export class DatabaseStorage implements IStorage {
   async updateAccountBalances(balances: InsertAccountBalance[]): Promise<AccountBalance[]> {
     const results = [];
     for (const b of balances) {
-      const [updated] = await db.update(accountBalances).set({ balance: b.balance, updatedAt: new Date() }).where(eq(accountBalances.name, b.name)).returning();
+      const [updated] = await db.update(accountBalances)
+        .set({ balance: b.balance, updatedAt: new Date() })
+        .where(eq(accountBalances.name, b.name))
+        .returning();
       results.push(updated);
     }
     return results;
@@ -490,12 +443,8 @@ export class DatabaseStorage implements IStorage {
   async updateBusinessSettings(settings: InsertBusinessSettings): Promise<BusinessSettings> {
     const existing = await this.getBusinessSettings();
     if (existing) {
-      const [updated] = await db
-        .update(businessSettings)
-        .set({ 
-          taxHoldPercent: settings.taxHoldPercent,
-          updatedAt: new Date() 
-        })
+      const [updated] = await db.update(businessSettings)
+        .set({ taxHoldPercent: settings.taxHoldPercent, updatedAt: new Date() })
         .where(eq(businessSettings.id, existing.id))
         .returning();
       return updated;
@@ -525,11 +474,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteBillsFundingLog(weekStartDate: string): Promise<boolean> {
-    const result = await db.delete(billsFundingLogs).where(eq(billsFundingLogs.weekStartDate, weekStartDate));
+    await db.delete(billsFundingLogs).where(eq(billsFundingLogs.weekStartDate, weekStartDate));
     return true;
   }
 
-  // === INVESTMENT SETTINGS (FIRE Planning) ===
+  // === INVESTMENT SETTINGS ===
 
   async getInvestmentSettings(): Promise<InvestmentSettings | undefined> {
     const [settings] = await db.select().from(investmentSettings).limit(1);
@@ -539,12 +488,8 @@ export class DatabaseStorage implements IStorage {
   async updateInvestmentSettings(settings: InsertInvestmentSettings): Promise<InvestmentSettings> {
     const existing = await this.getInvestmentSettings();
     if (existing) {
-      const [updated] = await db
-        .update(investmentSettings)
-        .set({
-          ...settings,
-          updatedAt: new Date()
-        })
+      const [updated] = await db.update(investmentSettings)
+        .set({ ...settings, updatedAt: new Date() })
         .where(eq(investmentSettings.id, existing.id))
         .returning();
       return updated;
@@ -563,36 +508,16 @@ export class DatabaseStorage implements IStorage {
   async createTransfer(transfer: InsertTransfer): Promise<Transfer> {
     const fromAccount = await this.getAccountById(transfer.fromAccountId);
     const toAccount = await this.getAccountById(transfer.toAccountId);
-    
-    if (!fromAccount || !toAccount) {
-      throw new Error("Invalid account IDs");
-    }
-    
-    if (transfer.fromAccountId === transfer.toAccountId) {
-      throw new Error("From and To accounts must be different");
-    }
-    
+    if (!fromAccount || !toAccount) throw new Error("Invalid account IDs");
+    if (transfer.fromAccountId === transfer.toAccountId) throw new Error("From and To accounts must be different");
     const amount = parseFloat(String(transfer.amount));
-    if (amount <= 0) {
-      throw new Error("Amount must be greater than zero");
-    }
-    
-    // Use a transaction to ensure atomicity
+    if (amount <= 0) throw new Error("Amount must be greater than zero");
+
     return await db.transaction(async (tx) => {
       const fromNewBalance = parseFloat(fromAccount.startingBalance || "0") - amount;
       const toNewBalance = parseFloat(toAccount.startingBalance || "0") + amount;
-      
-      // Update fromAccount startingBalance (subtract)
-      await tx.update(accounts)
-        .set({ startingBalance: String(fromNewBalance), updatedAt: new Date() })
-        .where(eq(accounts.id, transfer.fromAccountId));
-      
-      // Update toAccount startingBalance (add)
-      await tx.update(accounts)
-        .set({ startingBalance: String(toNewBalance), updatedAt: new Date() })
-        .where(eq(accounts.id, transfer.toAccountId));
-      
-      // Create transfer record with properly typed values
+      await tx.update(accounts).set({ startingBalance: String(fromNewBalance), updatedAt: new Date() }).where(eq(accounts.id, transfer.fromAccountId));
+      await tx.update(accounts).set({ startingBalance: String(toNewBalance), updatedAt: new Date() }).where(eq(accounts.id, transfer.toAccountId));
       const [created] = await tx.insert(transfers).values({
         date: transfer.date,
         fromAccountId: transfer.fromAccountId,
@@ -601,72 +526,75 @@ export class DatabaseStorage implements IStorage {
         note: transfer.note || null,
         createdBy: transfer.createdBy || "Me"
       }).returning();
-      
       return created;
     });
   }
 
   // === WEEKLY CASH SNAPSHOTS ===
-  
+
   async getWeeklyCashSnapshot(weekStartDate: string): Promise<WeeklyCashSnapshot | undefined> {
-    const [snapshot] = await db.select()
-      .from(weeklyCashSnapshots)
-      .where(eq(weeklyCashSnapshots.weekStartDate, weekStartDate));
+    const [snapshot] = await db.select().from(weeklyCashSnapshots).where(eq(weeklyCashSnapshots.weekStartDate, weekStartDate));
     return snapshot;
   }
 
   async upsertWeeklyCashSnapshot(snapshot: InsertWeeklyCashSnapshot): Promise<WeeklyCashSnapshot> {
     const existing = await this.getWeeklyCashSnapshot(snapshot.weekStartDate);
-    
     if (existing) {
       const [updated] = await db.update(weeklyCashSnapshots)
-        .set({ 
-          startingCash: snapshot.startingCash,
-          includeTrading: snapshot.includeTrading ?? false,
-          updatedAt: new Date() 
-        })
+        .set({ startingCash: snapshot.startingCash, includeTrading: snapshot.includeTrading ?? false, updatedAt: new Date() })
         .where(eq(weeklyCashSnapshots.weekStartDate, snapshot.weekStartDate))
         .returning();
       return updated;
     } else {
-      const [created] = await db.insert(weeklyCashSnapshots)
-        .values(snapshot)
-        .returning();
+      const [created] = await db.insert(weeklyCashSnapshots).values(snapshot).returning();
       return created;
     }
   }
 
   async deleteWeeklyCashSnapshot(weekStartDate: string): Promise<void> {
-    await db.delete(weeklyCashSnapshots)
-      .where(eq(weeklyCashSnapshots.weekStartDate, weekStartDate));
+    await db.delete(weeklyCashSnapshots).where(eq(weeklyCashSnapshots.weekStartDate, weekStartDate));
   }
 
   async computeTotalCash(includeTrading: boolean = false): Promise<number> {
     const accountsWithBalances = await this.getAccountsWithBalances();
-    
-    // Sum all accounts except business, excluded accounts, and optionally trading
     let total = 0;
     for (const account of accountsWithBalances) {
-      // Exclude business accounts
       if (account.type === "business") continue;
-      
-      // Exclude accounts marked as excludeFromTotals (e.g., Bills Pool)
       if (account.excludeFromTotals) continue;
-      
-      // Exclude trading if not included
       if (!includeTrading && account.name.toLowerCase().includes("trading")) continue;
-      
       total += account.currentBalance;
     }
-    
     return total;
   }
 
-  // Mark Bills Pool as excluded (migration for existing data)
   async markBillsPoolAsExcluded(): Promise<void> {
-    await db.update(accounts)
-      .set({ excludeFromTotals: true })
-      .where(eq(accounts.name, "Bills Pool"));
+    await db.update(accounts).set({ excludeFromTotals: true }).where(eq(accounts.name, "Bills Pool"));
+  }
+
+  // === BILL SCHEDULE ===
+
+  async getBillSchedule(): Promise<BillScheduleItem[]> {
+    return await db.select().from(billSchedule).orderBy(billSchedule.dueDay);
+  }
+
+  async createBillScheduleItem(data: InsertBillScheduleItem): Promise<BillScheduleItem> {
+    const [item] = await db.insert(billSchedule).values({
+      ...data,
+      amount: String(data.amount),
+    }).returning();
+    return item;
+  }
+
+  async updateBillScheduleItem(id: number, data: Partial<InsertBillScheduleItem>): Promise<BillScheduleItem> {
+    const [item] = await db.update(billSchedule)
+      .set({ ...data, ...(data.amount !== undefined && { amount: String(data.amount) }) })
+      .where(eq(billSchedule.id, id))
+      .returning();
+    return item;
+  }
+
+  async deleteBillScheduleItem(id: number): Promise<void> {
+    await db.delete(billSchedule).where(eq(billSchedule.id, id));
   }
 }
 
