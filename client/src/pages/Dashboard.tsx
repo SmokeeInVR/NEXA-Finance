@@ -256,8 +256,6 @@ export default function Dashboard() {
   const mtdDifference = mtdFunded - mtdTarget;
   const logsThisMonth = mtdLogs.length;
   const mtdShortfall = Math.max(0, mtdTarget - mtdFunded);
-  // True free money = what's left after spending AND bills catch-up obligation
-  const trueFreeThisWeek = remainingThisWeek - mtdShortfall;
 
   const myWeeklyTarget = weeklyFixed * (activeMyPct / 100);
   const spouseWeeklyTarget = weeklyFixed * (activeSpousePct / 100);
@@ -351,46 +349,20 @@ export default function Dashboard() {
             {hasIncomeThisWeek ? (
               <>
                 <div className="border-b pb-4 border-border space-y-3">
-                  {/* True free money — the honest number */}
                   <div className="flex justify-between items-end">
                     <div className="space-y-1">
-                      <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">
-                        {mtdShortfall > 0 ? "Actually Free This Week" : "Remaining This Week"}
-                      </Label>
-                      <p className={`text-3xl font-bold font-display ${trueFreeThisWeek > 0 ? "text-success" : "text-soft-red"}`}>
-                        {trueFreeThisWeek < 0 ? "-" : ""}${Math.abs(trueFreeThisWeek).toFixed(2)}
-                        <span className="text-xs ml-1 font-bold">{trueFreeThisWeek >= 0 ? "Free" : "Short"}</span>
+                      <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Remaining This Week</Label>
+                      <p className={`text-3xl font-bold font-display ${remainingThisWeek >= 0 ? "text-success" : "text-soft-red"}`}>
+                        {remainingThisWeek < 0 ? "-" : ""}${Math.abs(remainingThisWeek).toFixed(2)}
+                        <span className="text-xs ml-1 font-bold">{remainingThisWeek >= 0 ? "Left" : "Over"}</span>
                       </p>
+                      <p className="text-[10px] text-muted-foreground mt-1">For gas, groceries &amp; personal spending</p>
                     </div>
                     <div className="text-right space-y-1">
                       <Label className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest">Spent</Label>
                       <p className="text-lg font-bold font-mono text-foreground">${totalWeeklySpent.toFixed(2)}</p>
                     </div>
                   </div>
-
-                  {/* Breakdown — only shows when there's a shortfall */}
-                  {mtdShortfall > 0 && (
-                    <div className="bg-secondary/40 rounded-lg p-3 space-y-1.5">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-muted-foreground">Income this week</span>
-                        <span className="font-mono font-bold text-foreground">${totalWeeklyIncome.toFixed(0)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs">
-                        <span className="text-muted-foreground">Already spent</span>
-                        <span className="font-mono text-foreground">−${totalWeeklySpent.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs border-t border-border pt-1.5">
-                        <span className="text-amber-400 font-bold">Bills catch-up owed</span>
-                        <span className="font-mono font-bold text-amber-400">−${mtdShortfall.toFixed(0)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs border-t border-border pt-1.5">
-                        <span className="font-bold text-foreground">Actually free</span>
-                        <span className={`font-mono font-bold ${trueFreeThisWeek >= 0 ? "text-success" : "text-soft-red"}`}>
-                          {trueFreeThisWeek < 0 ? "-" : ""}${Math.abs(trueFreeThisWeek).toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
                 </div>
                 {hasSpendingThisWeek ? (
                   <div className="grid grid-cols-2 gap-x-8 gap-y-4">
