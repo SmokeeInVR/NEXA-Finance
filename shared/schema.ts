@@ -17,10 +17,10 @@ export type TransactionType = typeof TRANSACTION_TYPES[number];
 export const accounts = pgTable("accounts", {
   id: serial("id").primaryKey(),
   name: text("name").notNull().unique(),
-  type: text("type").notNull(), // personal, spouse, joint, bucket, business
+  type: text("type").notNull(),
   isActive: boolean("is_active").notNull().default(true),
   startingBalance: numeric("starting_balance").notNull().default("0"),
-  excludeFromTotals: boolean("exclude_from_totals").notNull().default(false), // Bills Pool excluded from balance snapshot
+  excludeFromTotals: boolean("exclude_from_totals").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -29,14 +29,14 @@ export const accounts = pgTable("accounts", {
 export const transactions = pgTable("transactions", {
   id: serial("id").primaryKey(),
   date: date("date").notNull(),
-  type: text("type").notNull(), // income, spend, transfer, bill_contribution, bill_payment, debt_payment, adjustment
+  type: text("type").notNull(),
   amount: numeric("amount").notNull(),
-  fromAccountId: integer("from_account_id"), // nullable - money leaving this account
-  toAccountId: integer("to_account_id"), // nullable - money entering this account
-  category: text("category"), // groceries, gas, rent, utilities, etc.
-  debtId: integer("debt_id"), // links to debts table for debt_payment type
+  fromAccountId: integer("from_account_id"),
+  toAccountId: integer("to_account_id"),
+  category: text("category"),
+  debtId: integer("debt_id"),
   notes: text("notes"),
-  createdBy: text("created_by").notNull().default("Me"), // Me, Spouse, Joint
+  createdBy: text("created_by").notNull().default("Me"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -44,7 +44,7 @@ export const transactions = pgTable("transactions", {
 export const budgetSettings = pgTable("budget_settings", {
   id: serial("id").primaryKey(),
   monthlyFixedBills: numeric("monthly_fixed_bills").notNull().default("0"),
-  splitMode: text("split_mode").notNull().default("AUTO"), // 'AUTO' | 'CUSTOM'
+  splitMode: text("split_mode").notNull().default("AUTO"),
   mySplitPct: numeric("my_split_pct").notNull().default("50"),
   spouseSplitPct: numeric("spouse_split_pct").notNull().default("50"),
   savingsMode: text("savings_mode").notNull().default("PERCENT"),
@@ -56,11 +56,11 @@ export const budgetSettings = pgTable("budget_settings", {
   tradingMode: text("trading_mode").notNull().default("PERCENT"),
   tradingValue: numeric("trading_value").notNull().default("0"),
   allocationFrequency: text("allocation_frequency").notNull().default("MONTHLY"),
-  incomeSource: text("income_source").notNull().default("MANUAL"), // 'MANUAL' | 'LOG_AVG'
-  avgWindowWeeks: integer("avg_window_weeks").notNull().default(4), // 4 | 8
+  incomeSource: text("income_source").notNull().default("MANUAL"),
+  avgWindowWeeks: integer("avg_window_weeks").notNull().default(4),
   bufferGoalAmount: numeric("buffer_goal_amount").notNull().default("1000"),
   bufferRerouteEnabled: boolean("buffer_reroute_enabled").notNull().default(false),
-  rerouteTarget: text("reroute_target").notNull().default("SAVINGS"), // 'SAVINGS' | 'INVESTING'
+  rerouteTarget: text("reroute_target").notNull().default("SAVINGS"),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -69,8 +69,8 @@ export const spendingLogs = pgTable("spending_logs", {
   id: serial("id").primaryKey(),
   date: date("date").notNull(),
   amount: numeric("amount").notNull(),
-  category: text("category").notNull(), // 'Groceries' | 'Gas / Fuel' | 'Personal (Me)' | 'Personal (Spouse)' | 'Household / Misc'
-  paidBy: text("paid_by").notNull(), // 'Me' | 'Spouse' | 'Joint'
+  category: text("category").notNull(),
+  paidBy: text("paid_by").notNull(),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -82,7 +82,6 @@ export const weeklyIncomeLogs = pgTable("weekly_income_logs", {
   myIncome: numeric("my_income").notNull().default("0"),
   spouseIncome: numeric("spouse_income").notNull().default("0"),
   notes: text("notes"),
-  // Deposit tracking fields
   deposited: boolean("deposited").notNull().default(false),
   myDepositAccountId: integer("my_deposit_account_id"),
   spouseDepositAccountId: integer("spouse_deposit_account_id"),
@@ -115,7 +114,7 @@ export const debts = pgTable("debts", {
   name: text("name").notNull(),
   balance: numeric("balance").notNull(),
   startingBalance: numeric("starting_balance"),
-  apr: numeric("apr"), // Optional
+  apr: numeric("apr"),
   monthlyPayment: numeric("monthly_payment").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -192,13 +191,25 @@ export const transfers = pgTable("transfers", {
   toAccountId: integer("to_account_id").notNull(),
   amount: numeric("amount").notNull(),
   note: text("note"),
-  createdBy: text("created_by").notNull().default("Me"), // Me, Spouse, Joint
+  createdBy: text("created_by").notNull().default("Me"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// === Bill Schedule ===
+export const billSchedule = pgTable("bill_schedule", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+  dueDay: integer("due_day").notNull(), // 1-31, day of month bill is due
+  category: text("category").notNull().default("Other"),
+  isVariable: boolean("is_variable").notNull().default(false), // true = estimated amount
+  autopay: boolean("autopay").notNull().default(false),
+  notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 // === BASE SCHEMAS ===
 
-// Accounts
 export const insertAccountSchema = createInsertSchema(accounts).omit({
   id: true,
   createdAt: true,
@@ -209,7 +220,6 @@ export const insertAccountSchema = createInsertSchema(accounts).omit({
   excludeFromTotals: true,
 });
 
-// Transactions - with type-specific validation
 export const insertTransactionSchema = createInsertSchema(transactions).omit({
   id: true,
   createdAt: true,
@@ -224,18 +234,16 @@ export const insertTransactionSchema = createInsertSchema(transactions).omit({
   debtId: z.number().nullable().optional(),
 }).refine(
   (data) => {
-    // At least one account must be specified
     if (!data.fromAccountId && !data.toAccountId) return false;
-    // Type-specific validation
     switch (data.type) {
       case "income":
-        return !!data.toAccountId; // income must have destination
+        return !!data.toAccountId;
       case "spend":
       case "debt_payment":
-        return !!data.fromAccountId; // spend/payment must have source
+        return !!data.fromAccountId;
       case "transfer":
       case "bill_contribution":
-        return !!data.fromAccountId && !!data.toAccountId; // transfers need both
+        return !!data.fromAccountId && !!data.toAccountId;
       default:
         return true;
     }
@@ -331,6 +339,16 @@ export const insertTransferSchema = createInsertSchema(transfers).omit({
   { message: "From and To accounts must be different" }
 );
 
+export const insertBillScheduleSchema = createInsertSchema(billSchedule).omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  amount: z.string().or(z.number()),
+  dueDay: z.number().int().min(1).max(31),
+  isVariable: z.boolean().default(false),
+  autopay: z.boolean().default(false),
+});
+
 // === TYPES ===
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -380,3 +398,6 @@ export type InsertTransfer = z.infer<typeof insertTransferSchema>;
 
 export type WeeklyCashSnapshot = typeof weeklyCashSnapshots.$inferSelect;
 export type InsertWeeklyCashSnapshot = z.infer<typeof insertWeeklyCashSnapshotSchema>;
+
+export type BillScheduleItem = typeof billSchedule.$inferSelect;
+export type InsertBillScheduleItem = z.infer<typeof insertBillScheduleSchema>;
