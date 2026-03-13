@@ -612,6 +612,27 @@ export async function registerRoutes(
     }
   });
 
+  // === NEXA OS CAMPAIGN SYNC ===
+  app.get("/api/os/campaign", async (_req, res) => {
+    try {
+      const data = await storage.getCampaign();
+      res.json(data || null);
+    } catch (err) {
+      console.error("Get campaign error:", err);
+      res.status(500).json({ message: "Failed to get campaign" });
+    }
+  });
+
+  app.post("/api/os/campaign", async (req, res) => {
+    try {
+      await storage.saveCampaign(req.body);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Save campaign error:", err);
+      res.status(500).json({ message: "Failed to save campaign" });
+    }
+  });
+
   // === BILL SCHEDULE ===
   app.get("/api/bill-schedule", async (_req, res) => {
     try {
