@@ -540,7 +540,15 @@ export async function registerRoutes(
       const weekEnd = new Date(monday);
       weekEnd.setDate(weekEnd.getDate() + 6);
       const currentWeekEnd = weekEnd.toISOString().split("T")[0];
-      const weeklyIncome = await storage.getWeeklyIncomeFromTransactions(currentWeekStart, currentWeekEnd);
+      const weeklyIncomeLogs = await storage.getWeeklyIncomeLogs();
+      const currentWeekLog = weeklyIncomeLogs.find(l => l.weekStartDate === currentWeekStart);
+      const mostRecentLog = weeklyIncomeLogs[0];
+      const activeLog = currentWeekLog || mostRecentLog;
+      const weeklyIncomeData = {
+        myIncome: activeLog ? parseFloat(String(activeLog.myIncome)) : 0,
+        spouseIncome: activeLog ? parseFloat(String(activeLog.spouseIncome)) : 0,
+        total: activeLog ? parseFloat(String(activeLog.myIncome)) + parseFloat(String(activeLog.spouseIncome)) : 0,
+      };
       const debtsWithPayments = await storage.getDebtsWithPayments();
       const totalDebt = debtsWithPayments.reduce((sum, d) => sum + d.remainingBalance, 0);
       const thirtyDaysAgo = new Date();
@@ -553,7 +561,7 @@ export async function registerRoutes(
         generatedAt: new Date().toISOString(),
         cash: { total: totalCash, totalWithTrading: totalCashWithTrading },
         accounts: accountsWithBalances.map(a => ({ id: a.id, name: a.name, type: a.type, currentBalance: a.currentBalance, excludeFromTotals: a.excludeFromTotals })),
-        income: { weekStartDate: currentWeekStart, myIncome: weeklyIncome.myIncome, spouseIncome: weeklyIncome.spouseIncome, totalWeekly: weeklyIncome.total, estimatedMonthly: weeklyIncome.total * 4.33 },
+        income: { weekStartDate: currentWeekStart, myIncome: weeklyIncomeData.myIncome, spouseIncome: weeklyIncomeData.spouseIncome, totalWeekly: weeklyIncomeData.total, estimatedMonthly: weeklyIncomeData.total * 4.33 },
         debts: { totalRemaining: totalDebt, count: debtsWithPayments.length, items: debtsWithPayments.map(d => ({ id: d.id, name: d.name, remainingBalance: d.remainingBalance, apr: d.apr, monthlyPayment: d.monthlyPayment })) },
         spending: { last30Days: monthlySpend, transactionCount: recentTransactions.length },
         fire: investmentSettings ? { investedBalance: parseFloat(investmentSettings.investedBalance || "0"), monthlyContribution: parseFloat(investmentSettings.monthlyContribution || "0"), targetMonthlyIncome: parseFloat(investmentSettings.targetMonthlyIncome || "0"), currentAge: investmentSettings.currentAge, targetAge: investmentSettings.targetAge } : null,
