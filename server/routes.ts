@@ -660,13 +660,9 @@ export async function registerRoutes(
         return;
       }
       const item = await storage.createBillScheduleItem({
-        name,
-        amount: String(amount),
-        dueDay: Number(dueDay),
-        category: category || "Other",
-        isVariable: !!isVariable,
-        autopay: !!autopay,
-        notes: notes || null,
+        name, amount: String(amount), dueDay: Number(dueDay),
+        category: category || "Other", isVariable: !!isVariable,
+        autopay: !!autopay, notes: notes || null,
       });
       res.status(201).json(item);
     } catch (err) {
@@ -702,6 +698,72 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Delete bill schedule error:", err);
       res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ═══════════════════════════════════════════════
+  // === MEAL PLANNER SYNC ===
+  // Stores the current meal plan from the Vercel
+  // Meal Planner app so Nexa OS can read it.
+  // In-memory store — persists across requests but
+  // resets on Railway redeploy (acceptable for now).
+  // ═══════════════════════════════════════════════
+  let mealPlanStore: any = null;
+
+  app.post("/api/meals/save", async (req, res) => {
+    try {
+      const { plan, generatedAt, estimatedTotal, cookMeals, cuisineStyle } = req.body;
+      if (!plan) { res.status(400).json({ message: "plan is required" }); return; }
+      mealPlanStore = {
+        plan,
+        generatedAt: generatedAt || new Date().toISOString(),
+        estimatedTotal: estimatedTotal || 0,
+        cookMeals: cookMeals || [],
+        cuisineStyle: cuisineStyle || null,
+        savedAt: new Date().toISOString(),
+      };
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Save meal plan error:", err);
+      res.status(500).json({ message: "Failed to save meal plan" });
+    }
+  });
+
+  app.get("/api/meals/summary", async (_req, res) => {
+    try {
+      if (!mealPlanStore) { res.json(null); return; }
+      const today = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][new Date().getDay()];
+      const plan = mealPlanStore.plan;
+      const todayMeal = plan?.weeklyMealPlan?.find((d: any) => d.day === today);
+      const tomorrowDay = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][(new Date().getDay() + 1) % 7];
+      const tomorrowMeal = plan?.weeklyMealPlan?.find((d: any) => d.day === tomorrowDay);
+      res.json({
+        generatedAt: mealPlanStore.generatedAt,
+        savedAt: mealPlanStore.savedAt,
+        estimatedTotal: mealPlanStore.estimatedTotal,
+        cuisineStyle: mealPlanStore.cuisineStyle,
+        cookMeals: mealPlanStore.cookMeals,
+        today: todayMeal ? {
+          day: todayMeal.day,
+          name: todayMeal.dinner.name,
+          isLeftover: !!todayMeal.isLeftoverNight,
+          babyVersion: todayMeal.dinner.babyVersion,
+          batchNote: todayMeal.dinner.batchNote || null,
+        } : null,
+        tomorrow: tomorrowMeal ? {
+          day: tomorrowMeal.day,
+          name: tomorrowMeal.dinner.name,
+          isLeftover: !!tomorrowMeal.isLeftoverNight,
+        } : null,
+        weeklyMeals: plan?.weeklyMealPlan?.map((d: any) => ({
+          day: d.day,
+          name: d.dinner.name,
+          isLeftover: !!d.isLeftoverNight,
+        })) || [],
+      });
+    } catch (err) {
+      console.error("Meal summary error:", err);
+      res.status(500).json({ message: "Failed to get meal summary" });
     }
   });
 
