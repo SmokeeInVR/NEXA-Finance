@@ -591,6 +591,27 @@ export async function registerRoutes(
   });
 
   // === ELEVENLABS TTS PROXY ===
+  // ── AI Chat Proxy (for mobile PWA compatibility) ──────────────────────────
+  app.post("/api/ai/chat", async (req, res) => {
+    try {
+      const { apiKey, messages, system, max_tokens } = req.body;
+      if (!apiKey || !messages) { res.status(400).json({ message: "apiKey and messages required" }); return; }
+      const body: any = { model: "claude-sonnet-4-6", max_tokens: max_tokens || 1000, messages };
+      if (system) body.system = system;
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) { res.status(r.status).json(data); return; }
+      res.json(data);
+    } catch (err) {
+      console.error("Chat proxy error:", err);
+      res.status(500).json({ message: "Chat proxy failed" });
+    }
+  });
+
   app.post("/api/ai/speak", async (req, res) => {
     try {
       const { text } = req.body;
