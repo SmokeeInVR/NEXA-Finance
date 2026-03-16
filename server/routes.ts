@@ -1,3 +1,4 @@
+import express from "express";
 import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
@@ -592,6 +593,38 @@ export async function registerRoutes(
 
   // === ELEVENLABS TTS PROXY ===
   // ── AI Chat Proxy (for mobile PWA compatibility) ──────────────────────────
+  // ── Food Scan (handles large image payloads) ──────────────────────────────
+  app.post("/api/ai/food-scan", express.json({ limit: "10mb" }), async (req, res) => {
+    try {
+      const { apiKey, image, mediaType } = req.body;
+      if (!image) { res.status(400).json({ message: "image required" }); return; }
+      const key = process.env.ANTHROPIC_API_KEY || apiKey;
+      if (!key) { res.status(500).json({ message: "No API key configured" }); return; }
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 400,
+          system: "You are a nutrition expert. Analyze food photos and return accurate macro estimates.",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: image } },
+              { type: "text", text: 'Analyze this meal photo. Return ONLY valid JSON: {"name":"Grilled Chicken & Rice","calories":520,"protein":42,"carbs":48,"fat":12,"fiber":3,"confidence":"medium","notes":"Estimated based on visible portion size"}' }
+            ]
+          }]
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) { res.status(r.status).json(data); return; }
+      res.json(data);
+    } catch (err) {
+      console.error("Food scan error:", err);
+      res.status(500).json({ message: "Food scan failed" });
+    }
+  });
+
   app.post("/api/ai/chat", async (req, res) => {
     try {
       const { messages, system, max_tokens, apiKey } = req.body;
