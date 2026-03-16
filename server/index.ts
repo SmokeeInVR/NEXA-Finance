@@ -2,12 +2,11 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+
 const app = express();
 const httpServer = createServer(app);
 
-// ── CORS — allow Nexa OS (Vercel) to call this API ──
-app.use((req, res, next) => {
-  const ALLOWED_ORIGINS = [
+const ALLOWED_ORIGINS = [
   'https://nexa-command.vercel.app',
   'https://nexa-meal-planner.vercel.app',
   'https://nexa-fitness.vercel.app',
@@ -15,7 +14,7 @@ app.use((req, res, next) => {
 ];
 
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", ...
+  const origin = req.headers.origin as string;
   if (ALLOWED_ORIGINS.includes(origin) || !origin) {
     res.header('Access-Control-Allow-Origin', origin || '*');
   }
@@ -25,11 +24,13 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
   }
 }
+
 app.use(
   express.json({
     verify: (req, _res, buf) => {
@@ -37,7 +38,9 @@ app.use(
     },
   }),
 );
+
 app.use(express.urlencoded({ extended: false }));
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -47,6 +50,7 @@ export function log(message: string, source = "express") {
   });
   console.log(`${formattedTime} [${source}] ${message}`);
 }
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -68,6 +72,7 @@ app.use((req, res, next) => {
   });
   next();
 });
+
 (async () => {
   await registerRoutes(httpServer, app);
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
