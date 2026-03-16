@@ -594,13 +594,16 @@ export async function registerRoutes(
   // ── AI Chat Proxy (for mobile PWA compatibility) ──────────────────────────
   app.post("/api/ai/chat", async (req, res) => {
     try {
-      const { apiKey, messages, system, max_tokens } = req.body;
-      if (!apiKey || !messages) { res.status(400).json({ message: "apiKey and messages required" }); return; }
+      const { messages, system, max_tokens, apiKey } = req.body;
+      if (!messages) { res.status(400).json({ message: "messages required" }); return; }
+      // Use server key first, fall back to client-provided key
+      const key = process.env.ANTHROPIC_API_KEY || apiKey;
+      if (!key) { res.status(500).json({ message: "No API key configured" }); return; }
       const body: any = { model: "claude-sonnet-4-6", max_tokens: max_tokens || 1000, messages };
       if (system) body.system = system;
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
         body: JSON.stringify(body),
       });
       const data = await r.json();
