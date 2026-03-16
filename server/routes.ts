@@ -767,5 +767,48 @@ export async function registerRoutes(
     }
   });
 
+  // ═══ FITNESS SUMMARY ═══════════════════════════════
+  let fitnessStore: any = null;
+
+  app.post("/api/fitness/summary", async (req, res) => {
+    try {
+      const { user, todayWorkout, weeklyCount, waterToday, waterGoal, streak } = req.body;
+      fitnessStore = { user: user||"Husband", todayWorkout: todayWorkout||null, weeklyCount: weeklyCount||0, waterToday: waterToday||0, waterGoal: waterGoal||8, streak: streak||0, savedAt: new Date().toISOString() };
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ message: "Failed to save fitness data" }); }
+  });
+
+  app.get("/api/fitness/summary", async (_req, res) => {
+    try { res.json(fitnessStore || null); }
+    catch (err) { res.status(500).json({ message: "Failed to get fitness summary" }); }
+  });
+
+  // ═══ FAMILY SUMMARY ════════════════════════════════
+  let familyStore: any = null;
+
+  app.post("/api/family/summary", async (req, res) => {
+    try {
+      const { dinner, tasksDone, tasksTotal, babyNapping, babyMood, todayEvents, napDuration } = req.body;
+      familyStore = { dinner: dinner||null, tasksDone: tasksDone||0, tasksTotal: tasksTotal||0, tasksPct: tasksTotal>0?Math.round((tasksDone/tasksTotal)*100):0, babyNapping: babyNapping||false, babyMood: babyMood||null, napDuration: napDuration||null, todayEvents: todayEvents||[], savedAt: new Date().toISOString() };
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ message: "Failed to save family data" }); }
+  });
+
+  app.get("/api/family/summary", async (_req, res) => {
+    try { res.json(familyStore || null); }
+    catch (err) { res.status(500).json({ message: "Failed to get family summary" }); }
+  });
+
+  // ═══ TRADING SUMMARY PROXY ═════════════════════════
+  app.get("/api/trading/summary", async (_req, res) => {
+    try {
+      const tradeUrl = process.env.NEXATRADE_URL;
+      if (!tradeUrl) { res.json(null); return; }
+      const r = await fetch(`${tradeUrl}/api/trading/summary`);
+      if (!r.ok) { res.json(null); return; }
+      res.json(await r.json());
+    } catch (err) { res.json(null); }
+  });
+
   return httpServer;
 }
