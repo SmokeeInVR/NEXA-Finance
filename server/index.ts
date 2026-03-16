@@ -7,22 +7,24 @@ const httpServer = createServer(app);
 
 // ── CORS — allow Nexa OS (Vercel) to call this API ──
 app.use((req, res, next) => {
-  const allowed = [
-    "https://nexa-command.vercel.app",
-    "https://nexa-command-git-main-marcelgovan-3238s-projects.vercel.app",
-    "http://localhost:5000",
-    "http://localhost:3000",
-  ];
-  const origin = req.headers.origin || "";
-  if (allowed.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
+  const ALLOWED_ORIGINS = [
+  'https://nexa-command.vercel.app',
+  'https://nexa-meal-planner.vercel.app',
+  'https://nexa-fitness.vercel.app',
+  'https://nexa-family-calendar.vercel.app',
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin as string;
+  if (ALLOWED_ORIGINS.includes(origin) || !origin) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
   }
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,PATCH,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
