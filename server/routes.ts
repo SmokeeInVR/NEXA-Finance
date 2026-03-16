@@ -599,7 +599,7 @@ export async function registerRoutes(
       // Use server key first, fall back to client-provided key
       const key = process.env.ANTHROPIC_API_KEY || apiKey;
       if (!key) { res.status(500).json({ message: "No API key configured" }); return; }
-      const body: any = { model: "claude-sonnet-4-5", max_tokens: max_tokens || 1000, messages };
+      const body: any = { model: "claude-sonnet-4-5", max_tokens: max_tokens || 2000, messages };
       if (system) body.system = system;
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
