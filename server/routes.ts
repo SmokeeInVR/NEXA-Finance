@@ -655,11 +655,11 @@ export async function registerRoutes(
       const apiKey = process.env.ELEVENLABS_API_KEY;
       if (!apiKey) { res.status(500).json({ message: "ElevenLabs API key not configured" }); return; }
       const trimmed = text.slice(0, 2500);
-      const voiceId = "pNInz6obpgDQGcFmaJgB";
+      const voiceId = process.env.ELEVENLABS_VOICE_ID || "pNInz6obpgDQGcFmaJgB";
       const elevenRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "xi-api-key": apiKey },
-        body: JSON.stringify({ text: trimmed, model_id: "eleven_turbo_v2_5", voice_settings: { stability: 0.4, similarity_boost: 0.85, style: 0.2, use_speaker_boost: true } })
+        body: JSON.stringify({ text: trimmed, model_id: "eleven_turbo_v2_5", voice_settings: { stability: 0.55, similarity_boost: 0.90, style: 0.15, use_speaker_boost: true } })
       });
       if (!elevenRes.ok) {
         const errText = await elevenRes.text();
