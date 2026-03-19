@@ -307,6 +307,20 @@ export async function registerRoutes(
     res.sendStatus(204);
   });
 
+  app.get("/api/income/pay-day", async (req, res) => {
+    // Returns whether today is a pay day and when next pay day is
+    try {
+      const payDay = parseInt(process.env.PAY_DAY_OF_WEEK || "3"); // 3 = Wednesday
+      const today = new Date();
+      const todayDay = today.getDay();
+      const isPayDay = todayDay === payDay;
+      const daysUntil = isPayDay ? 0 : (payDay - todayDay + 7) % 7;
+      const nextPayDay = new Date(today);
+      nextPayDay.setDate(today.getDate() + daysUntil);
+      res.json({ isPayDay, nextPayDay: nextPayDay.toISOString().split("T")[0], payDayName: ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][payDay] });
+    } catch(e) { res.status(500).json({ message: "Failed" }); }
+  });
+
   app.get("/api/income/latest", async (req, res) => {
     const logs = await storage.getWeeklyIncomeLogs();
     const now = new Date();
@@ -857,6 +871,30 @@ export async function registerRoutes(
   });
 
   // ═══ TRADING SUMMARY PROXY ═════════════════════════
+  // ── CLOUD SYNC ──────────────────────────────────────────────────────────────
+  const syncStore = new Map<string, any>();
+
+  app.post("/api/sync/save", async (req, res) => {
+    try {
+      const { familyId, appName, data } = req.body;
+      if(!familyId || !appName || !data) { res.status(400).json({ message: "Missing fields" }); return; }
+      const key = `${familyId}:${appName}`;
+      syncStore.set(key, { data, updatedAt: new Date().toISOString() });
+      res.json({ success: true, updatedAt: syncStore.get(key).updatedAt });
+    } catch(e) { res.status(500).json({ message: "Sync save failed" }); }
+  });
+
+  app.get("/api/sync/load", async (req, res) => {
+    try {
+      const { familyId, appName } = req.query as { familyId: string; appName: string };
+      if(!familyId || !appName) { res.status(400).json({ message: "Missing fields" }); return; }
+      const key = `${familyId}:${appName}`;
+      const stored = syncStore.get(key);
+      if(!stored) { res.status(404).json({ message: "No data found" }); return; }
+      res.json(stored);
+    } catch(e) { res.status(500).json({ message: "Sync load failed" }); }
+  });
+
   app.get("/api/trading/summary", async (_req, res) => {
     try {
       const tradeUrl = process.env.NEXATRADE_URL;
