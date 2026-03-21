@@ -17,6 +17,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { startOfWeek, endOfWeek, isWithinInterval, startOfMonth, endOfMonth, format, differenceInCalendarWeeks, addWeeks } from "date-fns";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import WeeklyIncomeCard from "@/components/WeeklyIncomeCard";
 
 interface BillScheduleItem {
   id: number;
