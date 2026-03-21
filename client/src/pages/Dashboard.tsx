@@ -749,6 +749,7 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
+<WeeklyIncomeCard />
 
       </div>
 
