@@ -905,5 +905,60 @@ export async function registerRoutes(
     } catch (err) { res.json(null); }
   });
 
+
+  // ═══ OS TIME BLOCKS ════════════════════════════════
+  // Stores scheduled inspection/work time blocks for Nexa OS dashboard.
+  // In-memory — resets on Railway redeploy (acceptable for now).
+  const osBlocksStore: any[] = [];
+
+  app.get("/api/os/blocks", async (_req, res) => {
+    try {
+      res.json(osBlocksStore);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to get OS blocks" });
+    }
+  });
+
+  app.post("/api/os/blocks", async (req, res) => {
+    try {
+      const { id, title, startTime, endTime, type, category, location, notes, date } = req.body;
+      if (!title || !startTime) {
+        res.status(400).json({ message: "title and startTime are required" });
+        return;
+      }
+      const block = {
+        id: id || `block-${Date.now()}`,
+        title,
+        startTime,
+        endTime: endTime || null,
+        type: type || "work",
+        category: category || "work",
+        location: location || null,
+        notes: notes || null,
+        date: date || startTime.split("T")[0],
+        createdAt: new Date().toISOString()
+      };
+      const existingIdx = osBlocksStore.findIndex((b: any) => b.id === block.id);
+      if (existingIdx !== -1) {
+        osBlocksStore[existingIdx] = block;
+      } else {
+        osBlocksStore.push(block);
+      }
+      res.status(201).json(block);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to save OS block" });
+    }
+  });
+
+  app.delete("/api/os/blocks/:id", async (req, res) => {
+    try {
+      const idx = osBlocksStore.findIndex((b: any) => b.id === req.params.id);
+      if (idx !== -1) osBlocksStore.splice(idx, 1);
+      res.sendStatus(204);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to delete OS block" });
+    }
+  });
+
   return httpServer;
 }
