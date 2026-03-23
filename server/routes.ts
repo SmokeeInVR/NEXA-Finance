@@ -860,7 +860,7 @@ export async function registerRoutes(
   app.post("/api/family/summary", async (req, res) => {
     try {
       const { dinner, tasksDone, tasksTotal, babyNapping, babyMood, todayEvents, napDuration } = req.body;
-      familyStore = { dinner: dinner||null, tasksDone: tasksDone||0, tasksTotal: tasksTotal||0, tasksPct: tasksTotal>0?Math.round((tasksDone/tasksTotal)*100):0, babyNapping: babyNapping||false, babyMood: babyMood||null, napDuration: napDuration||null, todayEvents: todayEvents||[], savedAt: new Date().toISOString() };
+      familyStore = { dinner: dinner||null, tasksDone: tasksDone||0, tasksTotal: tasksTotal||0, tasksPct: tasksTotal>0?Math.round((tasksDone/tasksTotal)*100):0, babyNapping: babyNapping||false, babyMood: babyMood||null, napDuration: napDuration||null, todayEvents: (todayEvents && todayEvents.length > 0) ? todayEvents : (familyStore.todayEvents||[]), savedAt: new Date().toISOString() };
       res.json({ success: true });
     } catch (err) { res.status(500).json({ message: "Failed to save family data" }); }
   });
