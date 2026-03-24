@@ -55,6 +55,7 @@ import {
   MinusCircle,
   Target,
   Pencil,
+  Building2,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { PlaidBankConnect } from "@/components/PlaidBankConnect";
