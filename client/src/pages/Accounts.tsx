@@ -214,7 +214,7 @@ function BalancesTab() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-4 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">From Account</label>
               <Select value={transferFrom} onValueChange={setTransferFrom}>
@@ -928,7 +928,12 @@ export default function Accounts() {
               <CreditCard className="w-4 h-4" /> Debts
             </TabsTrigger>
           
-          <TabsTrigger value="bank">Bank Accounts</TabsTrigger></TabsList>
+          <TabsTrigger
+              value="bank"
+              className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-bold flex items-center gap-2"
+            >
+              <Building2 className="w-4 h-4" /> Bank
+            </TabsTrigger></TabsList>
 
           <TabsContent value="balances" className="mt-4">
             <BalancesTab />
