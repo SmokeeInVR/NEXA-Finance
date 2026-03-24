@@ -5,6 +5,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { Parser } from "json2csv";
+import { PlaidApi, PlaidEnvironments, Configuration, Products, CountryCode } from 'plaid';
 
 export async function registerRoutes(
   httpServer: Server,
@@ -13,6 +14,21 @@ export async function registerRoutes(
   
   // Run migrations on startup
   await storage.markBillsPoolAsExcluded();
+
+  // ── Plaid Client Setup ──
+  const plaidConfig = new Configuration({
+    basePath: PlaidEnvironments[(process.env.PLAID_ENV as keyof typeof PlaidEnvironments) || 'sandbox'],
+    baseOptions: {
+      headers: {
+        'PLAID-CLIENT-ID': process.env.PLAID_CLIENT_ID || '',
+        'PLAID-SECRET': process.env.PLAID_SECRET || '',
+      },
+    },
+  });
+  const plaidClient = new PlaidApi(plaidConfig);
+
+  // In-memory token store — resets on redeploy. Upgrade to DB in Phase 4.
+  const plaidTokenStore = new Map<string, { accessToken: string; institutionName: string; accounts: any[] }>();
   
   // === ACCOUNTS (LEDGER SYSTEM) ===
   app.get(api.accounts.list.path, async (_req, res) => {
@@ -960,5 +976,181 @@ export async function registerRoutes(
     }
   });
 
-  return httpServer;
+  
+  // ===== PLAID ROUTES =====
+
+  app.post("/api/plaid/create-link-token", async (req, res) => {
+    try {
+      if (!process.env.PLAID_CLIENT_ID || !process.env.PLAID_SECRET) {
+        res.status(500).json({ message: "Plaid not configured — add PLAID_CLIENT_ID and PLAID_SECRET to Railway env vars" });
+        return;
+      }
+      const response = await plaidClient.linkTokenCreate({
+        user: { client_user_id: "nexa-user-1" },
+        client_name: "NEXA Finance",
+        products: [Products.Transactions, Products.Auth],
+        country_codes: [CountryCode.Us],
+        language: "en",
+      });
+      res.json({ link_token: response.data.link_token });
+    } catch (err: any) {
+      console.error("Plaid create-link-token error:", err?.response?.data || err);
+      res.status(500).json({ message: "Failed to create Plaid link token" });
+    }
+  });
+
+  app.post("/api/plaid/exchange-token", async (req, res) => {
+    try {
+      const { public_token, institution_name } = req.body;
+      if (!public_token) {
+        res.status(400).json({ message: "public_token required" });
+        return;
+      }
+      const exchangeResponse = await plaidClient.itemPublicTokenExchange({ public_token });
+      const accessToken = exchangeResponse.data.access_token;
+      const itemId = exchangeResponse.data.item_id;
+      const accountsResponse = await plaidClient.accountsGet({ access_token: accessToken });
+      const accounts = accountsResponse.data.accounts.map(a => ({
+        accountId: a.account_id,
+        name: a.name,
+        mask: a.mask,
+        type: a.type,
+        subtype: a.subtype,
+        balance: a.balances.current,
+        availableBalance: a.balances.available,
+      }));
+      plaidTokenStore.set(itemId, { accessToken, institutionName: institution_name || "Connected Bank", accounts });
+      console.log(`Plaid connected: ${institution_name} (${accounts.length} accounts)`);
+      res.json({ success: true, itemId, institutionName: institution_name || "Connected Bank", accounts });
+    } catch (err: any) {
+      console.error("Plaid exchange-token error:", err?.response?.data || err);
+      res.status(500).json({ message: "Failed to exchange Plaid token" });
+    }
+  });
+  app.get("/api/plaid/accounts", async (_req, res) => {
+    try {
+      if (plaidTokenStore.size === 0) { res.json({ connected: false, institutions: [] }); return; }
+      const institutions = [];
+      for (const [itemId, stored] of plaidTokenStore.entries()) {
+        try {
+          const response = await plaidClient.accountsGet({ access_token: stored.accessToken });
+          const accounts = response.data.accounts.map(a => ({
+            accountId: a.account_id, name: a.name, mask: a.mask, type: a.type,
+            subtype: a.subtype, balance: a.balances.current,
+            availableBalance: a.balances.available, isoCurrencyCode: a.balances.iso_currency_code,
+          }));
+          plaidTokenStore.set(itemId, { ...stored, accounts });
+          institutions.push({ itemId, institutionName: stored.institutionName, accounts });
+        } catch (err) { console.warn(`Failed to fetch accounts for item ${itemId}:`, err); }
+      }
+      const totalBalance = institutions.flatMap(i => i.accounts)
+        .filter(a => a.type === "depository").reduce((sum, a) => sum + (a.balance || 0), 0);
+      res.json({ connected: true, institutions, totalBalance, lastUpdated: new Date().toISOString() });
+    } catch (err: any) {
+      console.error("Plaid accounts error:", err?.response?.data || err);
+      res.status(500).json({ message: "Failed to fetch Plaid accounts" });
+    }
+  });
+
+  app.get("/api/plaid/transactions", async (req, res) => {
+    try {
+      if (plaidTokenStore.size === 0) { res.json({ connected: false, transactions: [] }); return; }
+      const days = Number(req.query.days) || 30;
+      const endDate = new Date().toISOString().split("T")[0];
+      const startDate = new Date(Date.now() - days * 86400000).toISOString().split("T")[0];
+      const allTransactions: any[] = [];
+      for (const [itemId, stored] of plaidTokenStore.entries()) {
+        try {
+          const response = await plaidClient.transactionsGet({ access_token: stored.accessToken, start_date: startDate, end_date: endDate });
+          allTransactions.push(...response.data.transactions.map(t => ({
+            transactionId: t.transaction_id, accountId: t.account_id, date: t.date,
+            name: t.name, amount: t.amount, category: t.category?.[0] || "Uncategorized",
+            subcategory: t.category?.[1] || null, merchantName: t.merchant_name,
+            institutionName: stored.institutionName, pending: t.pending,
+          })));
+        } catch (err) { console.warn(`Failed to fetch transactions for item ${itemId}:`, err); }
+      }
+      allTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      res.json({ connected: true, transactions: allTransactions, count: allTransactions.length, startDate, endDate });
+    } catch (err: any) {
+      console.error("Plaid transactions error:", err?.response?.data || err);
+      res.status(500).json({ message: "Failed to fetch Plaid transactions" });
+    }
+  });
+  app.post("/api/plaid/sync", async (req, res) => {
+    try {
+      if (plaidTokenStore.size === 0) { res.json({ connected: false, message: "No banks connected yet" }); return; }
+      const results: any[] = [];
+      let totalDeposits = 0;
+      for (const [itemId, stored] of plaidTokenStore.entries()) {
+        try {
+          const balanceResponse = await plaidClient.accountsGet({ access_token: stored.accessToken });
+          const endDate = new Date().toISOString().split("T")[0];
+          const startDate = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
+          const txResponse = await plaidClient.transactionsGet({ access_token: stored.accessToken, start_date: startDate, end_date: endDate });
+          const deposits = txResponse.data.transactions
+            .filter(t => t.amount < 0 && Math.abs(t.amount) > 100)
+            .map(t => ({ date: t.date, amount: Math.abs(t.amount), name: t.name,
+              accountName: balanceResponse.data.accounts.find(a => a.account_id === t.account_id)?.name }));
+          totalDeposits += deposits.reduce((sum, d) => sum + d.amount, 0);
+          const accounts = balanceResponse.data.accounts.map(a => ({
+            accountId: a.account_id, name: a.name, balance: a.balances.current,
+            availableBalance: a.balances.available, type: a.type,
+          }));
+          plaidTokenStore.set(itemId, { ...stored, accounts });
+          results.push({ institutionName: stored.institutionName, accounts, recentDeposits: deposits });
+        } catch (err) { console.warn(`Sync failed for item ${itemId}:`, err); }
+      }
+      res.json({ success: true, syncedAt: new Date().toISOString(), institutions: results, totalRecentDeposits: totalDeposits });
+    } catch (err: any) {
+      console.error("Plaid sync error:", err?.response?.data || err);
+      res.status(500).json({ message: "Plaid sync failed" });
+    }
+  });
+
+  app.get("/api/plaid/status", async (_req, res) => {
+    try {
+      const institutions = Array.from(plaidTokenStore.entries()).map(([itemId, stored]) => ({
+        itemId, institutionName: stored.institutionName, accountCount: stored.accounts.length,
+        accounts: stored.accounts.map(a => ({ name: a.name, mask: a.mask, type: a.type })),
+      }));
+      res.json({ connected: plaidTokenStore.size > 0, institutionCount: plaidTokenStore.size,
+        institutions, plaidEnv: process.env.PLAID_ENV || "sandbox" });
+    } catch (err) { res.status(500).json({ message: "Failed to get Plaid status" }); }
+  });
+
+  app.delete("/api/plaid/disconnect/:itemId", async (req, res) => {
+    try {
+      const { itemId } = req.params;
+      if (plaidTokenStore.has(itemId)) {
+        const stored = plaidTokenStore.get(itemId)!;
+        await plaidClient.itemRemove({ access_token: stored.accessToken });
+        plaidTokenStore.delete(itemId);
+        res.json({ success: true, message: `Disconnected ${stored.institutionName}` });
+      } else { res.status(404).json({ message: "Bank not found" }); }
+    } catch (err: any) {
+      console.error("Plaid disconnect error:", err?.response?.data || err);
+      res.status(500).json({ message: "Failed to disconnect bank" });
+    }
+  });
+
+  app.get("/api/plaid/balance-summary", async (_req, res) => {
+    try {
+      if (plaidTokenStore.size === 0) { res.json({ connected: false }); return; }
+      let totalChecking = 0, totalSavings = 0, totalCredit = 0;
+      const accounts: any[] = [];
+      for (const [, stored] of plaidTokenStore.entries()) {
+        for (const account of stored.accounts) {
+          const balance = account.balance || 0;
+          if (account.type === "depository") {
+            account.subtype === "savings" ? totalSavings += balance : totalChecking += balance;
+          } else if (account.type === "credit") { totalCredit += balance; }
+          accounts.push({ ...account, institutionName: stored.institutionName });
+        }
+      }
+      res.json({ connected: true, totalCash: totalChecking + totalSavings, totalChecking,
+        totalSavings, totalCreditOwed: totalCredit, accounts, lastUpdated: new Date().toISOString() });
+    } catch (err) { res.status(500).json({ message: "Failed to get balance summary" }); }
+  });
+return httpServer;
 }
