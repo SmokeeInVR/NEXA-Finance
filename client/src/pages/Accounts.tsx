@@ -57,6 +57,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { Label } from "@/components/ui/label";
+import { PlaidBankConnect } from "@/components/PlaidBankConnect";
 
 const updateBalanceSchema = z.object({
   balance: z.string().min(1, "Balance is required"),
@@ -926,7 +927,8 @@ export default function Accounts() {
             >
               <CreditCard className="w-4 h-4" /> Debts
             </TabsTrigger>
-          </TabsList>
+          
+          <TabsTrigger value="bank">Bank Accounts</TabsTrigger></TabsList>
 
           <TabsContent value="balances" className="mt-4">
             <BalancesTab />
@@ -935,6 +937,9 @@ export default function Accounts() {
           <TabsContent value="debts" className="mt-4">
             <DebtsTab />
           </TabsContent>
+        <TabsContent value="bank" className="mt-4">
+          <PlaidBankConnect />
+        </TabsContent>
         </Tabs>
       </div>
     </Layout>
