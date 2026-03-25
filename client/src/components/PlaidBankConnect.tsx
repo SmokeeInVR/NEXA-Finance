@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { usePlaidLink } from "react-plaid-link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -135,11 +135,13 @@ export function PlaidBankConnect() {
     }
   };
 
-  // When ready + pendingOpen, fire Plaid
-  if (ready && pendingOpen && linkToken) {
-    setPendingOpen(false);
-    open();
-  }
+  // When ready + pendingOpen, fire Plaid (must be in useEffect, not render body)
+  useEffect(() => {
+    if (ready && pendingOpen && linkToken) {
+      setPendingOpen(false);
+      open();
+    }
+  }, [ready, pendingOpen, linkToken, open]);
 
   const isConnected = data?.connected && (data?.institutions?.length ?? 0) > 0;
 
