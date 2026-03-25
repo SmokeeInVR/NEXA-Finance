@@ -20,8 +20,8 @@ export async function registerRoutes(
     basePath: PlaidEnvironments[(process.env.PLAID_ENV as keyof typeof PlaidEnvironments) || 'sandbox'],
     baseOptions: {
       headers: {
-        'PLAID-CLIENT-ID': process.env.PLAID_CLIENT_ID || '',
-        'PLAID-SECRET': process.env.PLAID_SECRET || '',
+        'PLAID-CLIENT-ID': (process.env.PLAID_CLIENT_ID || '').trim(),
+        'PLAID-SECRET': (process.env.PLAID_SECRET || '').trim(),
       },
     },
   });
