@@ -4,7 +4,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Building2, CreditCard, RefreshCw, Trash2, Wifi, WifiOff, DollarSign, PiggyBank } from "lucide-react";
 
@@ -34,9 +33,11 @@ interface PlaidAccountsData {
   lastUpdated: string;
 }
 
-// ─── Format helpers ──────────────────────────────────────
+// ─── Format helpers ────────────────────────────────────────
 const fmt = (n: number | null) =>
-  n == null ? "N/A" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+  n == null
+    ? "N/A"
+    : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 
 const accountIcon = (type: string) => {
   if (type === "credit") return <CreditCard className="w-4 h-4 text-orange-400" />;
@@ -44,32 +45,43 @@ const accountIcon = (type: string) => {
   return <PiggyBank className="w-4 h-4 text-emerald-400" />;
 };
 
-// ─── Component ───────────────────────────────────────────
+// ─── Component ─────────────────────────────────────────────
 export function PlaidBankConnect() {
   const qc = useQueryClient();
   const [linkToken, setLinkToken] = useState<string | null>(null);
-  const [isGeneratingToken, setIsGeneratingToken] = useState(false);
+  const [tokenLoading, setTokenLoading] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
 
   // Fetch connected accounts
-  const { data, isLoading, refetch } = useQuery<PlaidAccountsData>({
+  const { data, isLoading } = useQuery<PlaidAccountsData>({
     queryKey: ["/api/plaid/accounts"],
-    refetchInterval: 60000,
+    refetchInterval: 60_000,
   });
 
-  // Get link token then open Plaid
-  const getLinkToken = async () => {
-    setIsGeneratingToken(true);
-    try {
-      const res = await apiRequest("POST", "/api/plaid/create-link-token");
-      const json = await res.json();
-      setLinkToken(json.link_token);
-    } catch (e) {
-      console.error("Link token error:", e);
-    } finally {
-      setIsGeneratingToken(false);
-    }
-  };
-  // Exchange token after user authenticates
+  // Pre-fetch link token on mount so it's ready when user clicks
+  useEffect(() => {
+    const fetchToken = async () => {
+      setTokenLoading(true);
+      setTokenError(null);
+      try {
+        const res = await apiRequest("POST", "/api/plaid/create-link-token");
+        const json = await res.json();
+        if (json.link_token) {
+          setLinkToken(json.link_token);
+        } else {
+          setTokenError("Could not get link token");
+        }
+      } catch (e) {
+        console.error("Link token error:", e);
+        setTokenError("Failed to prepare bank connection");
+      } finally {
+        setTokenLoading(false);
+      }
+    };
+    fetchToken();
+  }, []);
+
+  // Exchange token after Plaid auth
   const exchangeMutation = useMutation({
     mutationFn: async ({ public_token, institution }: { public_token: string; institution: string }) => {
       const res = await apiRequest("POST", "/api/plaid/exchange-token", {
@@ -80,7 +92,13 @@ export function PlaidBankConnect() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/plaid/accounts"] });
+      // Refresh the link token for next use
       setLinkToken(null);
+      setTokenLoading(true);
+      apiRequest("POST", "/api/plaid/create-link-token")
+        .then(r => r.json())
+        .then(j => { if (j.link_token) setLinkToken(j.link_token); })
+        .finally(() => setTokenLoading(false));
     },
   });
 
@@ -102,7 +120,7 @@ export function PlaidBankConnect() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/plaid/accounts"] }),
   });
 
-  // Plaid Link config — only active when we have a token
+  // Plaid Link — token must exist before usePlaidLink is ready
   const onSuccess = useCallback((public_token: string, metadata: any) => {
     const institution = metadata?.institution?.name || "My Bank";
     exchangeMutation.mutate({ public_token, institution });
@@ -113,37 +131,22 @@ export function PlaidBankConnect() {
     onSuccess,
   });
 
-  // Auto-open Plaid Link once we have a token
-  const handleConnect = async () => {
-    await getLinkToken();
-  };
-  // Open Plaid as soon as token + SDK are ready
-  const [pendingOpen, setPendingOpen] = useState(false);
-
-  const triggerConnect = async () => {
-    setIsGeneratingToken(true);
-    setPendingOpen(true);
-    try {
-      const res = await apiRequest("POST", "/api/plaid/create-link-token");
-      const json = await res.json();
-      setLinkToken(json.link_token);
-    } catch (e) {
-      console.error("Link token error:", e);
-      setPendingOpen(false);
-    } finally {
-      setIsGeneratingToken(false);
-    }
-  };
-
-  // When ready + pendingOpen, fire Plaid (must be in useEffect, not render body)
-  useEffect(() => {
-    if (ready && pendingOpen && linkToken) {
-      setPendingOpen(false);
+  // ── Click handler: called directly from user gesture (no popup block risk)
+  const handleConnect = () => {
+    if (ready) {
       open();
     }
-  }, [ready, pendingOpen, linkToken, open]);
+  };
 
   const isConnected = data?.connected && (data?.institutions?.length ?? 0) > 0;
+  const btnDisabled = !ready || tokenLoading;
+  const btnLabel = tokenLoading
+    ? "Preparing..."
+    : tokenError
+    ? "Retry"
+    : !ready
+    ? "Loading..."
+    : "Connect Bank";
 
   // ─── Render ───
   return (
@@ -151,11 +154,15 @@ export function PlaidBankConnect() {
       {/* Header bar */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {isConnected
-            ? <Wifi className="w-5 h-5 text-emerald-400" />
-            : <WifiOff className="w-5 h-5 text-gray-400" />}
+          {isConnected ? (
+            <Wifi className="w-5 h-5 text-emerald-400" />
+          ) : (
+            <WifiOff className="w-5 h-5 text-gray-400" />
+          )}
           <span className="text-sm font-medium text-gray-300">
-            {isConnected ? `${data!.institutions.length} bank${data!.institutions.length > 1 ? "s" : ""} connected` : "No banks connected"}
+            {isConnected
+              ? `${data!.institutions.length} bank${data!.institutions.length > 1 ? "s" : ""} connected`
+              : "No banks connected"}
           </span>
         </div>
         <div className="flex gap-2">
@@ -173,16 +180,22 @@ export function PlaidBankConnect() {
           )}
           <Button
             size="sm"
-            onClick={triggerConnect}
-            disabled={isGeneratingToken || (!!linkToken && !ready)}
+            onClick={handleConnect}
+            disabled={btnDisabled}
             className="gap-1 text-xs bg-emerald-600 hover:bg-emerald-700"
           >
             <Building2 className="w-3 h-3" />
-            {isGeneratingToken ? "Connecting..." : "Connect Bank"}
+            {btnLabel}
           </Button>
         </div>
       </div>
-      {/* Loading */}
+
+      {/* Error */}
+      {tokenError && (
+        <p className="text-xs text-red-400 text-center">{tokenError}</p>
+      )}
+
+      {/* Loading accounts */}
       {isLoading && (
         <div className="text-center py-8 text-gray-400 text-sm">Loading accounts...</div>
       )}
@@ -196,62 +209,64 @@ export function PlaidBankConnect() {
               Connect your bank account to see real balances and transactions
             </p>
             <Button
-              onClick={triggerConnect}
-              disabled={isGeneratingToken}
+              onClick={handleConnect}
+              disabled={btnDisabled}
               className="mt-2 bg-emerald-600 hover:bg-emerald-700"
             >
-              {isGeneratingToken ? "Opening Plaid..." : "Connect a Bank Account"}
+              {btnLabel}
             </Button>
           </CardContent>
         </Card>
       )}
 
       {/* Connected institutions */}
-      {isConnected && data!.institutions.map((institution) => (
-        <Card key={institution.itemId} className="bg-gray-900/60 border-gray-700">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-blue-400" />
-                {institution.institutionName}
-              </CardTitle>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="w-7 h-7 text-gray-500 hover:text-red-400"
-                onClick={() => disconnectMutation.mutate(institution.itemId)}
-                disabled={disconnectMutation.isPending}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0 space-y-2">
-            {institution.accounts.map((acct, i) => (
-              <div key={acct.accountId}>
-                {i > 0 && <Separator className="bg-gray-800 my-2" />}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    {accountIcon(acct.type)}
-                    <div>
-                      <p className="text-sm font-medium text-gray-200">{acct.name}</p>
-                      <p className="text-xs text-gray-500">
-                        {acct.subtype} {acct.mask ? `····${acct.mask}` : ""}
-                      </p>
+      {isConnected &&
+        data!.institutions.map((institution) => (
+          <Card key={institution.itemId} className="bg-gray-900/60 border-gray-700">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-blue-400" />
+                  {institution.institutionName}
+                </CardTitle>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="w-7 h-7 text-gray-500 hover:text-red-400"
+                  onClick={() => disconnectMutation.mutate(institution.itemId)}
+                  disabled={disconnectMutation.isPending}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 space-y-2">
+              {institution.accounts.map((acct, i) => (
+                <div key={acct.accountId}>
+                  {i > 0 && <Separator className="bg-gray-800 my-2" />}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {accountIcon(acct.type)}
+                      <div>
+                        <p className="text-sm font-medium text-gray-200">{acct.name}</p>
+                        <p className="text-xs text-gray-500">
+                          {acct.subtype} {acct.mask ? `····${acct.mask}` : ""}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-gray-100">{fmt(acct.balance)}</p>
+                      {acct.availableBalance != null &&
+                        acct.availableBalance !== acct.balance && (
+                          <p className="text-xs text-gray-500">{fmt(acct.availableBalance)} avail</p>
+                        )}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-gray-100">{fmt(acct.balance)}</p>
-                    {acct.availableBalance != null && acct.availableBalance !== acct.balance && (
-                      <p className="text-xs text-gray-500">{fmt(acct.availableBalance)} avail</p>
-                    )}
-                  </div>
                 </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      ))}
+              ))}
+            </CardContent>
+          </Card>
+        ))}
 
       {/* Total bar */}
       {isConnected && (
