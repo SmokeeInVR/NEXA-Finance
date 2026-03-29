@@ -995,7 +995,7 @@ export async function registerRoutes(
       res.json({ link_token: response.data.link_token });
     } catch (err: any) {
       console.error("Plaid create-link-token error:", err?.response?.data || err);
-      res.status(500).json({ message: "Failed to create Plaid link token" });
+      res.status(500).json({ message: "Failed to create Plaid link token", error: err?.response?.data || err?.message || String(err) });
     }
   });
 
