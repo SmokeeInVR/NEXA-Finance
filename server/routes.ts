@@ -988,7 +988,7 @@ export async function registerRoutes(
       const response = await plaidClient.linkTokenCreate({
         user: { client_user_id: "nexa-user-1" },
         client_name: "NEXA Finance",
-        products: [Products.Transactions, Products.Auth],
+        products: [Products.Transactions],
         country_codes: [CountryCode.Us],
         language: "en",
       });
