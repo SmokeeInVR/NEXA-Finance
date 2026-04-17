@@ -610,7 +610,7 @@ export async function registerRoutes(
       const { prompt } = req.body;
       const apiKey = process.env.GEMINI_API_KEY || "";
       if (!apiKey) { res.status(500).json({ message: "Gemini API key not configured" }); return; }
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash/generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -635,7 +635,7 @@ export async function registerRoutes(
       if (!image) { res.status(400).json({ message: "image required" }); return; }
       const key = process.env.GEMINI_API_KEY || apiKey;
       if (!key) { res.status(500).json({ message: "No API key configured" }); return; }
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash/generateContent?key=${key}`, {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -682,7 +682,9 @@ export async function registerRoutes(
       };
       if (system) body.system_instruction = { parts: [{ text: system }] };
 
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent?key=${key}`, {
+      // Use configurable model, default to gemini-3.1-pro-preview (April 2026)
+      const model = process.env.GEMINI_MODEL || "gemini-3-flash-preview";
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
