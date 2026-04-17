@@ -608,10 +608,15 @@ export async function registerRoutes(
   app.post("/api/ai/insights", async (req, res) => {
     try {
       const { prompt } = req.body;
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const apiKey = process.env.GEMINI_API_KEY || "";
+      if (!apiKey) { res.status(500).json({ message: "Gemini API key not configured" }); return; }
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro/generateContent?key=${apiKey}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY || "", "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 1000, messages: [{ role: "user", content: prompt }] })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 1000 }
+        })
       });
       const data = await response.json();
       res.json(data);
@@ -628,22 +633,20 @@ export async function registerRoutes(
     try {
       const { apiKey, image, mediaType } = req.body;
       if (!image) { res.status(400).json({ message: "image required" }); return; }
-      const key = process.env.ANTHROPIC_API_KEY || apiKey;
+      const key = process.env.GEMINI_API_KEY || apiKey;
       if (!key) { res.status(500).json({ message: "No API key configured" }); return; }
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro/generateContent?key=${key}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5",
-          max_tokens: 400,
-          system: "You are a nutrition expert. Analyze food photos and return accurate macro estimates.",
-          messages: [{
-            role: "user",
-            content: [
-              { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: image } },
-              { type: "text", text: 'Analyze this meal photo. Return ONLY valid JSON: {"name":"Grilled Chicken & Rice","calories":520,"protein":42,"carbs":48,"fat":12,"fiber":3,"confidence":"medium","notes":"Estimated based on visible portion size"}' }
+          system_instruction: { parts: [{ text: "You are a nutrition expert. Analyze food photos and return accurate macro estimates." }] },
+          contents: [{
+            parts: [
+              { inline_data: { mime_type: mediaType || "image/jpeg", data: image } },
+              { text: 'Analyze this meal photo. Return ONLY valid JSON: {"name":"Grilled Chicken & Rice","calories":520,"protein":42,"carbs":48,"fat":12,"fiber":3,"confidence":"medium","notes":"Estimated based on visible portion size"}' }
             ]
-          }]
+          }],
+          generationConfig: { maxOutputTokens: 400 }
         }),
       });
       const data = await r.json();
@@ -660,13 +663,24 @@ export async function registerRoutes(
       const { messages, system, max_tokens, apiKey } = req.body;
       if (!messages) { res.status(400).json({ message: "messages required" }); return; }
       // Use server key first, fall back to client-provided key
-      const key = process.env.ANTHROPIC_API_KEY || apiKey;
+      const key = process.env.GEMINI_API_KEY || apiKey;
       if (!key) { res.status(500).json({ message: "No API key configured" }); return; }
-      const body: any = { model: "claude-sonnet-4-5", max_tokens: max_tokens || 2000, messages };
-      if (system) body.system = system;
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
+
+      // Convert messages from Anthropic format to Gemini format
+      const contents = messages.map((msg: any) => ({
+        role: msg.role === "user" ? "user" : "model",
+        parts: [{ text: msg.content }]
+      }));
+
+      const body: any = {
+        contents,
+        generationConfig: { maxOutputTokens: max_tokens || 2000 }
+      };
+      if (system) body.system_instruction = { parts: [{ text: system }] };
+
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro/generateContent?key=${key}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const data = await r.json();
