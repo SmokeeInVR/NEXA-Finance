@@ -15,7 +15,9 @@ const ALLOWED_ORIGINS = [
 
 app.use((req, res, next) => {
   const origin = req.headers.origin as string;
-  if (ALLOWED_ORIGINS.includes(origin) || !origin) {
+  // Allow specific origins + all vercel.app subdomains (for dynamic preview URLs)
+  const isAllowed = !origin || ALLOWED_ORIGINS.includes(origin) || origin?.includes('.vercel.app');
+  if (isAllowed) {
     res.header('Access-Control-Allow-Origin', origin || '*');
   }
   res.header('Access-Control-Allow-Credentials', 'true');
