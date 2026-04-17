@@ -610,7 +610,7 @@ export async function registerRoutes(
       const { prompt } = req.body;
       const apiKey = process.env.GEMINI_API_KEY || "";
       if (!apiKey) { res.status(500).json({ message: "Gemini API key not configured" }); return; }
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro/generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash/generateContent?key=${apiKey}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -635,7 +635,7 @@ export async function registerRoutes(
       if (!image) { res.status(400).json({ message: "image required" }); return; }
       const key = process.env.GEMINI_API_KEY || apiKey;
       if (!key) { res.status(500).json({ message: "No API key configured" }); return; }
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro/generateContent?key=${key}`, {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash/generateContent?key=${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -664,7 +664,11 @@ export async function registerRoutes(
       if (!messages) { res.status(400).json({ message: "messages required" }); return; }
       // Use server key first, fall back to client-provided key
       const key = process.env.GEMINI_API_KEY || apiKey;
-      if (!key) { res.status(500).json({ message: "No API key configured" }); return; }
+      if (!key) {
+        console.error("No Gemini API key found. ENV var:", !!process.env.GEMINI_API_KEY, "Client key:", !!apiKey);
+        res.status(500).json({ message: "No Gemini API key configured - set GEMINI_API_KEY in Railway environment" });
+        return;
+      }
 
       // Convert messages from Anthropic format to Gemini format
       const contents = messages.map((msg: any) => ({
@@ -678,7 +682,7 @@ export async function registerRoutes(
       };
       if (system) body.system_instruction = { parts: [{ text: system }] };
 
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro/generateContent?key=${key}`, {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash/generateContent?key=${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
