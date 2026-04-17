@@ -618,8 +618,20 @@ export async function registerRoutes(
           generationConfig: { maxOutputTokens: 1000 }
         })
       });
-      const data = await response.json();
-      res.json(data);
+      const geminiData = await response.json();
+
+      // Transform Gemini response to Anthropic format
+      if (geminiData.candidates && geminiData.candidates[0]) {
+        const candidate = geminiData.candidates[0];
+        const text = candidate.content?.parts?.[0]?.text || "";
+        const transformedData = {
+          content: [{ type: "text", text }],
+          stop_reason: candidate.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn"
+        };
+        res.json(transformedData);
+      } else {
+        res.json(geminiData);
+      }
     } catch (err) {
       console.error("AI proxy error:", err);
       res.status(500).json({ message: "AI request failed" });
@@ -649,9 +661,21 @@ export async function registerRoutes(
           generationConfig: { maxOutputTokens: 400 }
         }),
       });
-      const data = await r.json();
-      if (!r.ok) { res.status(r.status).json(data); return; }
-      res.json(data);
+      const geminiData = await r.json();
+      if (!r.ok) { res.status(r.status).json(geminiData); return; }
+
+      // Transform Gemini response to Anthropic format
+      if (geminiData.candidates && geminiData.candidates[0]) {
+        const candidate = geminiData.candidates[0];
+        const text = candidate.content?.parts?.[0]?.text || "";
+        const transformedData = {
+          content: [{ type: "text", text }],
+          stop_reason: candidate.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn"
+        };
+        res.json(transformedData);
+      } else {
+        res.json(geminiData);
+      }
     } catch (err) {
       console.error("Food scan error:", err);
       res.status(500).json({ message: "Food scan failed" });
@@ -691,7 +715,7 @@ export async function registerRoutes(
       });
 
       const responseText = await r.text();
-      console.log("Gemini response status:", r.status, "Body:", responseText.substring(0, 200));
+      console.log("Gemini response status:", r.status);
 
       if (!r.ok) {
         console.error("Gemini API error:", responseText);
@@ -699,8 +723,20 @@ export async function registerRoutes(
         return;
       }
 
-      const data = JSON.parse(responseText);
-      res.json(data);
+      const geminiData = JSON.parse(responseText);
+
+      // Transform Gemini response to Anthropic format for frontend compatibility
+      if (geminiData.candidates && geminiData.candidates[0]) {
+        const candidate = geminiData.candidates[0];
+        const text = candidate.content?.parts?.[0]?.text || "";
+        const transformedData = {
+          content: [{ type: "text", text }],
+          stop_reason: candidate.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn"
+        };
+        res.json(transformedData);
+      } else {
+        res.json(geminiData);
+      }
     } catch (err) {
       console.error("Chat proxy error:", err);
       res.status(500).json({ message: "Chat proxy failed", error: String(err) });
