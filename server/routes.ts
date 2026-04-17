@@ -620,17 +620,12 @@ export async function registerRoutes(
       });
       const geminiData = await response.json();
 
-      // Transform Gemini response to Anthropic format
+      // Extract just the text from Gemini response
       if (geminiData.candidates && geminiData.candidates[0]) {
-        const candidate = geminiData.candidates[0];
-        const text = candidate.content?.parts?.[0]?.text || "";
-        const transformedData = {
-          content: [{ type: "text", text }],
-          stop_reason: candidate.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn"
-        };
-        res.json(transformedData);
+        const text = geminiData.candidates[0].content?.parts?.[0]?.text || "";
+        res.json({ text });  // Return simple format that frontend expects
       } else {
-        res.json(geminiData);
+        res.status(500).json({ message: "Invalid Gemini response" });
       }
     } catch (err) {
       console.error("AI proxy error:", err);
@@ -664,17 +659,12 @@ export async function registerRoutes(
       const geminiData = await r.json();
       if (!r.ok) { res.status(r.status).json(geminiData); return; }
 
-      // Transform Gemini response to Anthropic format
+      // Extract text from Gemini response
       if (geminiData.candidates && geminiData.candidates[0]) {
-        const candidate = geminiData.candidates[0];
-        const text = candidate.content?.parts?.[0]?.text || "";
-        const transformedData = {
-          content: [{ type: "text", text }],
-          stop_reason: candidate.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn"
-        };
-        res.json(transformedData);
+        const text = geminiData.candidates[0].content?.parts?.[0]?.text || "";
+        res.json({ text });
       } else {
-        res.json(geminiData);
+        res.status(500).json({ message: "Invalid Gemini response" });
       }
     } catch (err) {
       console.error("Food scan error:", err);
@@ -725,17 +715,12 @@ export async function registerRoutes(
 
       const geminiData = JSON.parse(responseText);
 
-      // Transform Gemini response to Anthropic format for frontend compatibility
+      // Extract text from Gemini response
       if (geminiData.candidates && geminiData.candidates[0]) {
-        const candidate = geminiData.candidates[0];
-        const text = candidate.content?.parts?.[0]?.text || "";
-        const transformedData = {
-          content: [{ type: "text", text }],
-          stop_reason: candidate.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn"
-        };
-        res.json(transformedData);
+        const text = geminiData.candidates[0].content?.parts?.[0]?.text || "";
+        res.json({ text });
       } else {
-        res.json(geminiData);
+        res.status(500).json({ message: "Invalid Gemini response" });
       }
     } catch (err) {
       console.error("Chat proxy error:", err);
