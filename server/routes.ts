@@ -682,17 +682,26 @@ export async function registerRoutes(
       };
       if (system) body.system_instruction = { parts: [{ text: system }] };
 
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash/generateContent?key=${key}`, {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro/generateContent?key=${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await r.json();
-      if (!r.ok) { res.status(r.status).json(data); return; }
+
+      const responseText = await r.text();
+      console.log("Gemini response status:", r.status, "Body:", responseText.substring(0, 200));
+
+      if (!r.ok) {
+        console.error("Gemini API error:", responseText);
+        res.status(r.status).json({ message: `Gemini API error: ${r.status}`, detail: responseText });
+        return;
+      }
+
+      const data = JSON.parse(responseText);
       res.json(data);
     } catch (err) {
       console.error("Chat proxy error:", err);
-      res.status(500).json({ message: "Chat proxy failed" });
+      res.status(500).json({ message: "Chat proxy failed", error: String(err) });
     }
   });
 
