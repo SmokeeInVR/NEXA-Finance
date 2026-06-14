@@ -4,6 +4,8 @@ import { Loader2, Home, TrendingUp } from "lucide-react";
 
 const HOUSE_FUND_GOAL = 2000;
 const WEEKLY_SURPLUS = 131;
+const START_DATE = new Date(2026, 5, 14); // June 14, 2026 (month is 0-indexed)
+const TARGET_DEADLINE = new Date(2026, 7, 28); // Aug 28, 2026 (10 weeks from start)
 
 export function HouseFundTracker() {
   const { data: accounts, isLoading } = useAccountsWithBalances();
@@ -18,7 +20,15 @@ export function HouseFundTracker() {
   const targetDate = new Date(today.getTime() + weeksToGoal * 7 * 24 * 60 * 60 * 1000);
   const monthsAway = (weeksToGoal / 4.33).toFixed(1);
 
-  const isOnTrack = currentBalance >= (HOUSE_FUND_GOAL * progressPercent) / 100;
+  // Calculate on-track status against deadline
+  const totalDays = (TARGET_DEADLINE.getTime() - START_DATE.getTime()) / (1000 * 60 * 60 * 24);
+  const totalWeeks = Math.ceil(totalDays / 7);
+  const daysElapsed = Math.max(0, (today.getTime() - START_DATE.getTime()) / (1000 * 60 * 60 * 24));
+  const weeksElapsed = Math.max(0, daysElapsed / 7);
+
+  // Expected balance = what we should have accumulated by today if maintaining $131/week
+  const expectedBalance = Math.min(HOUSE_FUND_GOAL, weeksElapsed * WEEKLY_SURPLUS);
+  const isOnTrack = currentBalance >= expectedBalance * 0.95; // Allow 5% margin for variability
   const statusColor = isOnTrack ? "text-success" : "text-soft-red";
   const statusText = isOnTrack ? "On track" : "Behind pace";
 
