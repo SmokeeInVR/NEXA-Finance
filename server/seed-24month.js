@@ -8,15 +8,16 @@ function generateWeeklySnapshots() {
   const BASELINE_SURPLUS = 131;
 
   const snapshots = [];
-  const startDate = new Date("2024-01-01");
+  // Use UTC date to avoid timezone drift: 2024-01-01 00:00:00 UTC
+  const startDate = new Date(Date.UTC(2024, 0, 1));
 
   for (let i = 0; i < 104; i++) {
     const weekStart = new Date(startDate);
-    weekStart.setDate(weekStart.getDate() + i * 7);
+    weekStart.setUTCDate(weekStart.getUTCDate() + i * 7);
 
-    const year = weekStart.getFullYear();
-    const month = String(weekStart.getMonth() + 1).padStart(2, "0");
-    const day = String(weekStart.getDate()).padStart(2, "0");
+    const year = weekStart.getUTCFullYear();
+    const month = String(weekStart.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(weekStart.getUTCDate()).padStart(2, "0");
     const dateStr = `${year}-${month}-${day}`;
 
     // Vary income/expense slightly for realism (~±5% variance)
@@ -60,8 +61,9 @@ function generatePaymentHistory() {
   const payments = [];
   let paymentId = 1;
 
-  const startDate = new Date("2024-01-01");
-  const endDate = new Date("2025-12-31");
+  // Use UTC date to avoid timezone drift
+  const startDate = new Date(Date.UTC(2024, 0, 1));
+  const endDate = new Date(Date.UTC(2025, 11, 31));
 
   for (let month = 0; month < 24; month++) {
     const currentDate = new Date(startDate);
@@ -93,8 +95,15 @@ function generatePaymentHistory() {
       });
     }
 
-    const subscriptionAmount = Math.round((2019.24 - monthlyTotal) * 100) / 100;
-    const subPaymentDate = new Date(year, monthNum, 1);
+    let subscriptionAmount = Math.round((2019.24 - monthlyTotal) * 100) / 100;
+    // Prevent negative subscription amounts (clamp to minimum $0.01 or skip if negative)
+    if (subscriptionAmount < 0) {
+      // Log warning and set to 0.00
+      console.warn(`⚠️  Month ${month}: subscription would be $${subscriptionAmount} (bills exceeded target). Setting to $0.00`);
+      subscriptionAmount = 0;
+    }
+
+    const subPaymentDate = new Date(Date.UTC(year, monthNum, 1));
     const subDateStr = subPaymentDate.toISOString().split("T")[0];
 
     payments.push({
@@ -148,8 +157,11 @@ async function runSeed24Month() {
     console.log(`     - Average payment: $${avgPayment.toFixed(2)}`);
 
     console.log("\n═══════════════════════════════════════════════════════════");
-    console.log("  ✓ PHASE 3C COMPLETE: Data ready for database insertion");
-    console.log("  → Next: Phase 3D (Mobile/Responsive refinements, deferred)");
+    console.log("  ✓ PHASE 3C COMPLETE: Data GENERATED (NOT INSERTED)");
+    console.log("═══════════════════════════════════════════════════════════");
+    console.log("  STATUS: This script GENERATES data only.");
+    console.log("  NEXT:   Insert data into database via separate import tool");
+    console.log("          or run with --insert flag for auto-insertion (TBD)");
     console.log("═══════════════════════════════════════════════════════════\n");
 
     // Show sample data
