@@ -218,6 +218,37 @@ export const billSchedule = pgTable("bill_schedule", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// === Bills Registry (Sprint 1: Household Bills Tracking) ===
+export const billsRegistry = pgTable("bills_registry", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+  dueDay: integer("due_day").notNull(),
+  category: text("category").notNull(), // HOUSING, AUTO, UTILITIES, COMMS, etc.
+  isVariable: boolean("is_variable").notNull().default(false),
+  importance: text("importance").notNull().default("important"), // critical, important, optional
+  startDate: date("start_date").notNull(), // when bill starts (e.g., Aug 14 for new apt)
+  endDate: date("end_date"), // when bill ends (nullable = ongoing)
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// === Weekly Snapshots (Sprint 1: Loan Documentation Trail) ===
+export const weeklySnapshots = pgTable("weekly_snapshots", {
+  id: serial("id").primaryKey(),
+  weekStartDate: date("week_start_date").notNull().unique(),
+  householdIncome: numeric("household_income", { precision: 10, scale: 2 }).notNull().default("0"),
+  householdExpense: numeric("household_expense", { precision: 10, scale: 2 }).notNull().default("0"),
+  debtPayment: numeric("debt_payment", { precision: 10, scale: 2 }).notNull().default("0"),
+  houseFundAllocation: numeric("house_fund_allocation", { precision: 10, scale: 2 }).notNull().default("0"),
+  surplus: numeric("surplus", { precision: 10, scale: 2 }).notNull().default("0"),
+  status: text("status").notNull().default("on_track"), // ahead, on_track, behind
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // === BASE SCHEMAS ===
 
 export const insertAccountSchema = createInsertSchema(accounts).omit({
@@ -359,6 +390,30 @@ export const insertBillScheduleSchema = createInsertSchema(billSchedule).omit({
   autopay: z.boolean().default(false),
 });
 
+export const insertBillsRegistrySchema = createInsertSchema(billsRegistry).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  amount: z.string().or(z.number()),
+  dueDay: z.number().int().min(1).max(31),
+  isVariable: z.boolean().default(false),
+  importance: z.enum(["critical", "important", "optional"]).default("important"),
+});
+
+export const insertWeeklySnapshotSchema = createInsertSchema(weeklySnapshots).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  householdIncome: z.string().or(z.number()).default("0"),
+  householdExpense: z.string().or(z.number()).default("0"),
+  debtPayment: z.string().or(z.number()).default("0"),
+  houseFundAllocation: z.string().or(z.number()).default("0"),
+  surplus: z.string().or(z.number()).default("0"),
+  status: z.enum(["ahead", "on_track", "behind"]).default("on_track"),
+});
+
 // === TYPES ===
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -411,3 +466,9 @@ export type InsertWeeklyCashSnapshot = z.infer<typeof insertWeeklyCashSnapshotSc
 
 export type BillScheduleItem = typeof billSchedule.$inferSelect;
 export type InsertBillScheduleItem = z.infer<typeof insertBillScheduleSchema>;
+
+export type BillsRegistryItem = typeof billsRegistry.$inferSelect;
+export type InsertBillsRegistryItem = z.infer<typeof insertBillsRegistrySchema>;
+
+export type WeeklySnapshot = typeof weeklySnapshots.$inferSelect;
+export type InsertWeeklySnapshot = z.infer<typeof insertWeeklySnapshotSchema>;
