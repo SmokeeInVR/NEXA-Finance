@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useBudgetSettings } from "@/hooks/use-budget";
 import { useAccountsWithBalances } from "@/hooks/use-accounts";
 import { useTransactions } from "@/hooks/use-transactions";
-import { insertBudgetSettingsSchema, type InsertBudgetSettings, type WeeklyIncomeLog, type AccountBalance, type SpendingLog, type BillsFundingLog } from "@shared/schema";
+import { insertBudgetSettingsSchema, type InsertBudgetSettings, type WeeklyIncomeLog, type SpendingLog, type BillsFundingLog } from "@shared/schema";
 import { Switch } from "@/components/ui/switch";
 import { Loader2, TrendingUp, Wallet, PieChart, Save, Receipt, DollarSign, Check, Trash2, Plus, X, CalendarClock, AlertTriangle, ChevronDown, ChevronUp, Zap } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { startOfWeek, endOfWeek, isWithinInterval, startOfMonth, endOfMonth, format, differenceInCalendarWeeks, addWeeks } from "date-fns";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import WeeklyIncomeCard from "@/components/WeeklyIncomeCard";
+import { WeeklySnapshotCard } from "@/components/WeeklySnapshotCard";
 
 interface BillScheduleItem {
   id: number;
@@ -54,7 +55,6 @@ export default function Dashboard() {
   }, [refetchLatest]);
 
   const { data: spendingLogs, isLoading: isSpendingLoading } = useQuery<SpendingLog[]>({ queryKey: ["/api/spending"] });
-  const { data: balances } = useQuery<AccountBalance[]>({ queryKey: ["/api/balances"] });
   const { data: billsFundingLogs } = useQuery<BillsFundingLog[]>({ queryKey: ["/api/bills-funding"] });
   const { data: ledgerAccounts } = useAccountsWithBalances();
   const { data: ledgerTransactions } = useTransactions();
@@ -296,6 +296,9 @@ export default function Dashboard() {
   return (
     <Layout title="Dashboard">
       <div className="space-y-6">
+
+        {/* Weekly Cash Flow Snapshot - P0 Priority */}
+        <WeeklySnapshotCard />
 
         {/* Summary Cards */}
         <div className="grid grid-cols-2 gap-3">
