@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import WeeklyIncomeCard from "@/components/WeeklyIncomeCard";
 import { WeeklySnapshotCard } from "@/components/WeeklySnapshotCard";
 import { HouseFundTracker } from "@/components/HouseFundTracker";
+import { BillsRegistryCard } from "@/components/BillsRegistryCard";
 
 interface BillScheduleItem {
   id: number;
@@ -303,6 +304,9 @@ export default function Dashboard() {
 
         {/* House Fund Tracker - P0 Priority */}
         <HouseFundTracker />
+
+        {/* Bills Registry - P0 Priority */}
+        <BillsRegistryCard />
 
         {/* Summary Cards */}
         <div className="grid grid-cols-2 gap-3">
