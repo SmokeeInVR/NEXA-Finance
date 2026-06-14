@@ -29,6 +29,29 @@ export async function registerRoutes(
 
   // In-memory token store — resets on redeploy. Upgrade to DB in Phase 4.
   const plaidTokenStore = new Map<string, { accessToken: string; institutionName: string; accounts: any[] }>();
+
+  const legacyBalanceAccountMap: Record<string, string> = {
+    "My Checking": "Personal Checking (Me)",
+    "Spouse Checking": "Spouse Checking",
+    "Joint Bills": "Joint Checking",
+    "Savings": "Savings",
+    "Trading": "Trading Funds",
+    "Buffer": "Emergency Buffer",
+    "Taxes Set-Aside": "Tax Set-Aside",
+  };
+
+  const getLegacyBalancesSnapshot = async () => {
+    const accountsWithBalances = await storage.getAccountsWithBalances();
+    return Object.entries(legacyBalanceAccountMap).map(([legacyName, accountName]) => {
+      const account = accountsWithBalances.find((entry) => entry.name === accountName);
+      return {
+        id: account?.id ?? null,
+        name: legacyName,
+        balance: (account?.currentBalance ?? 0).toFixed(2),
+        updatedAt: account?.updatedAt ?? null,
+      };
+    });
+  };
   
   // === ACCOUNTS (LEDGER SYSTEM) ===
   app.get(api.accounts.list.path, async (_req, res) => {
@@ -365,14 +388,44 @@ export async function registerRoutes(
 
   // === BALANCES ===
   app.get(api.balances.list.path, async (_req, res) => {
-    const balances = await storage.getAccountBalances();
+    const balances = await getLegacyBalancesSnapshot();
     res.json(balances);
   });
 
   app.post(api.balances.update.path, async (req, res) => {
     try {
       const input = api.balances.update.input.parse(req.body);
-      const balances = await storage.updateAccountBalances(input);
+      const accountsWithBalances = await storage.getAccountsWithBalances();
+
+      for (const balanceUpdate of input) {
+        const mappedAccountName = legacyBalanceAccountMap[balanceUpdate.name];
+        if (!mappedAccountName) {
+          res.status(400).json({ message: `Unknown legacy balance account: ${balanceUpdate.name}` });
+          return;
+        }
+
+        const account = accountsWithBalances.find((entry) => entry.name === mappedAccountName);
+        if (!account) {
+          res.status(404).json({ message: `Canonical account not found for ${balanceUpdate.name}` });
+          return;
+        }
+
+        const desiredBalance = parseFloat(String(balanceUpdate.balance));
+        if (Number.isNaN(desiredBalance)) {
+          res.status(400).json({ message: `Invalid balance for ${balanceUpdate.name}` });
+          return;
+        }
+
+        const startingBalance = parseFloat(account.startingBalance || "0");
+        const transactionDelta = account.currentBalance - startingBalance;
+        const newStartingBalance = desiredBalance - transactionDelta;
+
+        await storage.updateAccount(account.id, {
+          startingBalance: newStartingBalance.toFixed(2),
+        });
+      }
+
+      const balances = await getLegacyBalancesSnapshot();
       res.json(balances);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input" }); return; }
@@ -472,7 +525,7 @@ export async function registerRoutes(
     else if (type === 'mileage') { data = await storage.getMileageEntries(); fields = ['date', 'miles', 'purpose', 'createdAt']; }
     else if (type === 'debts') { data = await storage.getDebts(); fields = ['name', 'balance', 'apr', 'monthlyPayment', 'createdAt']; }
     else if (type === 'income') { data = await storage.getWeeklyIncomeLogs(); fields = ['weekStartDate', 'myIncome', 'spouseIncome', 'notes', 'createdAt']; }
-    else if (type === 'balances') { data = await storage.getAccountBalances(); fields = ['name', 'balance', 'updatedAt']; }
+    else if (type === 'balances') { data = await getLegacyBalancesSnapshot(); fields = ['name', 'balance', 'updatedAt']; }
     else if (type === 'spending') { data = await storage.getSpendingLogs(); fields = ['date', 'amount', 'category', 'paidBy', 'notes', 'createdAt']; }
     else { res.status(400).send("Invalid export type"); return; }
     try {
@@ -835,6 +888,32 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Delete bill schedule error:", err);
       res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ═══════════════════════════════════════════════
+  // === SPRINT 1: BILLS REGISTRY (USDA Documentation) ===
+  // Read-only endpoints for Bills Registry and Weekly Snapshots
+  // These tables support USDA loan documentation with 24-month history trail
+  // ═══════════════════════════════════════════════
+
+  app.get("/api/bills-registry", async (_req, res) => {
+    try {
+      const bills = await storage.getBillsRegistry();
+      res.json(bills || []);
+    } catch (err) {
+      console.error("Get bills registry error:", err);
+      res.status(500).json({ message: "Failed to fetch bills registry" });
+    }
+  });
+
+  app.get("/api/weekly-snapshots", async (_req, res) => {
+    try {
+      const snapshots = await storage.getWeeklySnapshots();
+      res.json(snapshots || []);
+    } catch (err) {
+      console.error("Get weekly snapshots error:", err);
+      res.status(500).json({ message: "Failed to fetch weekly snapshots" });
     }
   });
 

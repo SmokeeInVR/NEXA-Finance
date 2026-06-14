@@ -1,16 +1,16 @@
 import { db } from "./db";
-import { 
+import {
   budgetSettings, debts, businessExpenses, mileageEntries,
-  weeklyIncomeLogs, accountBalances, spendingLogs,
+  weeklyIncomeLogs, spendingLogs,
   businessIncomeLogs, businessSettings, billsFundingLogs,
   accounts, transactions, investmentSettings, transfers,
   weeklyCashSnapshots, billSchedule, campaignData,
+  billsRegistry, weeklySnapshots,
   type InsertBudgetSettings, type BudgetSettings,
   type InsertDebt, type Debt,
   type InsertBusinessExpense, type BusinessExpense,
   type InsertMileageEntry, type MileageEntry,
   type InsertWeeklyIncomeLog, type WeeklyIncomeLog,
-  type InsertAccountBalance, type AccountBalance,
   type InsertSpendingLog, type SpendingLog,
   type InsertBusinessIncomeLog, type BusinessIncomeLog,
   type InsertBusinessSettings, type BusinessSettings,
@@ -21,6 +21,7 @@ import {
   type InsertTransfer, type Transfer,
   type InsertWeeklyCashSnapshot, type WeeklyCashSnapshot,
   type InsertBillScheduleItem, type BillScheduleItem,
+  type BillsRegistryItem, type WeeklySnapshot,
   type CampaignData,
 } from "@shared/schema";
 import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
@@ -79,10 +80,6 @@ export interface IStorage {
   upsertWeeklyIncomeLog(log: InsertWeeklyIncomeLog): Promise<WeeklyIncomeLog>;
   deleteWeeklyIncomeLog(id: number): Promise<void>;
 
-  // Account Balances (Legacy)
-  getAccountBalances(): Promise<AccountBalance[]>;
-  updateAccountBalances(balances: InsertAccountBalance[]): Promise<AccountBalance[]>;
-
   // Business Income
   getBusinessIncomeLogs(): Promise<BusinessIncomeLog[]>;
   createBusinessIncomeLog(log: InsertBusinessIncomeLog): Promise<BusinessIncomeLog>;
@@ -117,6 +114,12 @@ export interface IStorage {
   createBillScheduleItem(data: InsertBillScheduleItem): Promise<BillScheduleItem>;
   updateBillScheduleItem(id: number, data: Partial<InsertBillScheduleItem>): Promise<BillScheduleItem>;
   deleteBillScheduleItem(id: number): Promise<void>;
+
+  // Bills Registry (Sprint 1: USDA Loan Documentation)
+  getBillsRegistry(): Promise<BillsRegistryItem[]>;
+
+  // Weekly Snapshots (Sprint 1: 24-Month USDA Trail)
+  getWeeklySnapshots(): Promise<WeeklySnapshot[]>;
 
   // Campaign Data (Nexa OS sync)
   getCampaign(): Promise<any | null>;
@@ -398,35 +401,6 @@ export class DatabaseStorage implements IStorage {
     await db.delete(weeklyIncomeLogs).where(eq(weeklyIncomeLogs.id, id));
   }
 
-  async getAccountBalances(): Promise<AccountBalance[]> {
-    const balances = await db.select().from(accountBalances).orderBy(accountBalances.name);
-    if (balances.length === 0) {
-      const defaults = [
-        { name: "My Checking", balance: "0" },
-        { name: "Spouse Checking", balance: "0" },
-        { name: "Joint Bills", balance: "0" },
-        { name: "Savings", balance: "0" },
-        { name: "Trading", balance: "0" },
-        { name: "Buffer", balance: "0" },
-        { name: "Taxes Set-Aside", balance: "0" },
-      ];
-      return await db.insert(accountBalances).values(defaults).returning();
-    }
-    return balances;
-  }
-
-  async updateAccountBalances(balances: InsertAccountBalance[]): Promise<AccountBalance[]> {
-    const results = [];
-    for (const b of balances) {
-      const [updated] = await db.update(accountBalances)
-        .set({ balance: b.balance, updatedAt: new Date() })
-        .where(eq(accountBalances.name, b.name))
-        .returning();
-      results.push(updated);
-    }
-    return results;
-  }
-
   async getBusinessIncomeLogs(): Promise<BusinessIncomeLog[]> {
     return await db.select().from(businessIncomeLogs).orderBy(desc(businessIncomeLogs.date));
   }
@@ -591,8 +565,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateBillScheduleItem(id: number, data: Partial<InsertBillScheduleItem>): Promise<BillScheduleItem> {
+    const updateData: Partial<BillScheduleItem> = {
+      ...(data.name !== undefined ? { name: data.name } : {}),
+      ...(data.amount !== undefined ? { amount: String(data.amount) } : {}),
+      ...(data.dueDay !== undefined ? { dueDay: data.dueDay } : {}),
+      ...(data.isVariable !== undefined ? { isVariable: data.isVariable } : {}),
+      ...(data.autopay !== undefined ? { autopay: data.autopay } : {}),
+      ...(data.category !== undefined ? { category: data.category } : {}),
+      ...(data.notes !== undefined ? { notes: data.notes } : {}),
+    };
+
     const [item] = await db.update(billSchedule)
-      .set({ ...data, ...(data.amount !== undefined && { amount: String(data.amount) }) })
+      .set(updateData)
       .where(eq(billSchedule.id, id))
       .returning();
     return item;
@@ -600,6 +584,28 @@ export class DatabaseStorage implements IStorage {
 
   async deleteBillScheduleItem(id: number): Promise<void> {
     await db.delete(billSchedule).where(eq(billSchedule.id, id));
+  }
+
+  // === BILLS REGISTRY (Sprint 1: USDA Loan Documentation) ===
+
+  async getBillsRegistry(): Promise<BillsRegistryItem[]> {
+    try {
+      return await db.select().from(billsRegistry).orderBy(billsRegistry.dueDay);
+    } catch (err) {
+      console.error("Get bills registry error:", err);
+      return [];
+    }
+  }
+
+  // === WEEKLY SNAPSHOTS (Sprint 1: 24-Month USDA Trail) ===
+
+  async getWeeklySnapshots(): Promise<WeeklySnapshot[]> {
+    try {
+      return await db.select().from(weeklySnapshots).orderBy(desc(weeklySnapshots.weekStartDate));
+    } catch (err) {
+      console.error("Get weekly snapshots error:", err);
+      return [];
+    }
   }
 
   // === CAMPAIGN DATA ===

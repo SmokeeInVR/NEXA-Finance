@@ -33,7 +33,8 @@ async function seedSprint1() {
     // 2. Create Bills Registry entries
     console.log("📋 Populating Bills Registry...");
 
-    const billsToCreate = [
+    // Recurring critical household bills (6 items)
+    const recurringBills = [
       {
         name: "Apartment Rent (NEW)",
         amount: "1317.00",
@@ -43,18 +44,7 @@ async function seedSprint1() {
         importance: "critical",
         startDate: "2026-08-14", // Move-in date
         endDate: null,
-        notes: "New apartment starting Aug 14, 2026",
-      },
-      {
-        name: "Apartment Move-In",
-        amount: "576.88",
-        dueDay: 14,
-        category: "HOUSING",
-        isVariable: false,
-        importance: "critical",
-        startDate: "2026-08-14",
-        endDate: "2026-08-14",
-        notes: "One-time move-in cost",
+        notes: "New apartment starting Aug 14, 2026 (monthly)",
       },
       {
         name: "Insurance (Auto + Renters)",
@@ -65,7 +55,7 @@ async function seedSprint1() {
         importance: "critical",
         startDate: "2026-06-14",
         endDate: null,
-        notes: "Car and renters insurance",
+        notes: "Car and renters insurance (monthly)",
       },
       {
         name: "Cox Internet",
@@ -76,7 +66,7 @@ async function seedSprint1() {
         importance: "critical",
         startDate: "2026-06-14",
         endDate: null,
-        notes: "Internet service",
+        notes: "Internet service (monthly)",
       },
       {
         name: "Verizon Wireless Phone",
@@ -87,7 +77,7 @@ async function seedSprint1() {
         importance: "critical",
         startDate: "2026-06-14",
         endDate: null,
-        notes: "Mobile phone service (variable)",
+        notes: "Mobile phone service (monthly, variable)",
       },
       {
         name: "APS Electric",
@@ -98,11 +88,28 @@ async function seedSprint1() {
         importance: "critical",
         startDate: "2026-06-14",
         endDate: null,
-        notes: "Electric utility (variable)",
+        notes: "Electric utility (monthly, variable)",
       },
     ];
 
-    for (const bill of billsToCreate) {
+    // One-time bills (separate category)
+    const oneTimeBills = [
+      {
+        name: "Apartment Move-In (One-Time)",
+        amount: "576.88",
+        dueDay: 14,
+        category: "HOUSING",
+        isVariable: false,
+        importance: "critical",
+        startDate: "2026-08-14",
+        endDate: "2026-08-14",
+        notes: "One-time move-in cost - Aug 14, 2026",
+      },
+    ];
+
+    let billCount = 0;
+
+    for (const bill of recurringBills) {
       const result = await db
         .insert(billsRegistry)
         .values(bill)
@@ -111,10 +118,24 @@ async function seedSprint1() {
 
       if (result.length > 0) {
         console.log(`   ✓ ${bill.name} ($${bill.amount})`);
+        billCount++;
       }
     }
 
-    console.log(`\n   ✓ ${billsToCreate.length} critical household bills registered\n`);
+    for (const bill of oneTimeBills) {
+      const result = await db
+        .insert(billsRegistry)
+        .values(bill)
+        .onConflictDoNothing()
+        .returning();
+
+      if (result.length > 0) {
+        console.log(`   ✓ ${bill.name} ($${bill.amount}) [ONE-TIME]`);
+        billCount++;
+      }
+    }
+
+    console.log(`\n   ✓ ${billCount} critical household bills registered (5 recurring + 1 one-time)\n`);
 
     // 3. Initialize weekly snapshot (this week's baseline)
     console.log("📊 Creating weekly snapshot baseline...");
@@ -125,23 +146,32 @@ async function seedSprint1() {
 
     const weekStart = weekStartDate.toISOString().split("T")[0];
 
+    // Calculate weekly values (dividing monthly by 4.33 weeks/month)
+    // Monthly: Income $4,120 = Weekly $951.15
+    // Monthly: Household bills $2,596.12 = Weekly $599.10
+    // Monthly: Debt $697.21 = Weekly $160.94
+    // Monthly: Groceries+Gas ~$600 = Weekly $138.55
+    // Total expenses: $898.59; Surplus: $52.56
+    // Note: house fund allocation ($175/week) comes from surplus for debt paydown phase
+
     const snapshot = await db
       .insert(weeklySnapshots)
       .values({
         weekStartDate: weekStart,
-        householdIncome: "4120", // ~$670/week inspection + $360/week employment
-        householdExpense: "2595", // Critical bills only
-        debtPayment: "697", // Car payments
-        houseFundAllocation: "175",
-        surplus: "202",
+        householdIncome: "1030", // $670 inspection (variable) + $360 employment (fixed)
+        householdExpense: "738", // $599 bills + $139 groceries/gas (weekly average)
+        debtPayment: "161", // $697 monthly / 4.33 weeks
+        houseFundAllocation: "53", // Remaining surplus after expenses
+        surplus: "53",
         status: "on_track",
-        notes: "Sprint 1 baseline snapshot",
+        notes: "Sprint 1 baseline: weekly snapshot for USDA 24-month trail",
       })
       .onConflictDoNothing()
       .returning();
 
     if (snapshot.length > 0) {
-      console.log(`   ✓ Weekly snapshot created for week of ${weekStart}\n`);
+      console.log(`   ✓ Weekly snapshot created for week of ${weekStart}`);
+      console.log(`     Income: $1,030 | Expenses: $738 | Debt: $161 | House Fund: $53 | Surplus: $53\n`);
     }
 
     console.log("✅ Sprint 1 seed complete!\n");
