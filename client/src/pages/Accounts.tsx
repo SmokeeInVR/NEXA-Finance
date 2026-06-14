@@ -203,7 +203,14 @@ function BalancesTab() {
   const bucketAccounts = accounts.filter(a => a.type === "bucket" && !a.excludeFromTotals);
   const totalBankBalance = bankAccounts.filter(a => a.type !== "business").reduce((sum, a) => sum + a.currentBalance, 0);
   const totalBucketBalance = bucketAccounts.reduce((sum, a) => sum + a.currentBalance, 0);
-  const allAccounts = [...bankAccounts.filter(a => a.type !== "business"), ...bucketAccounts];
+
+  // Dual-ledger separation (Phase 2E)
+  const householdAccounts = bankAccounts.filter(a => a.type !== "business");
+  const businessAccounts = bankAccounts.filter(a => a.type === "business");
+  const householdBalance = householdAccounts.reduce((sum, a) => sum + a.currentBalance, 0);
+  const businessBalance = businessAccounts.reduce((sum, a) => sum + a.currentBalance, 0);
+
+  const allAccounts = [...householdAccounts, ...bucketAccounts];
 
   return (
     <div className="space-y-4">
@@ -331,15 +338,22 @@ function BalancesTab() {
         </CardContent>
       </Card>
 
-      {/* Bank Accounts Card */}
-      <Card className="border-border bg-card shadow-lg">
-        <CardHeader className="pb-3 border-b border-border bg-secondary/20">
-          <CardTitle className="text-lg flex items-center gap-2 text-gold">
-            <Wallet className="w-5 h-5" /> Bank Accounts
-          </CardTitle>
-        </CardHeader>
+      {/* Dual-Ledger View: Household & Business (Phase 2E) */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* Household Column */}
+        <Card className="border-border bg-card shadow-lg">
+          <CardHeader className="pb-3 border-b border-border bg-secondary/20">
+            <CardTitle className="text-lg flex items-center gap-2 text-gold">
+              <Wallet className="w-5 h-5" /> Household Accounts
+            </CardTitle>
+          </CardHeader>
         <CardContent className="p-4 space-y-3">
-          {bankAccounts.filter(a => a.type !== "business").map((account) => (
+          {/* Household Total */}
+          <div className="p-3 rounded-lg bg-success/10 border border-success/30 mb-2">
+            <p className="text-xs text-muted-foreground uppercase font-bold mb-1">Total</p>
+            <p className="text-2xl font-bold font-mono text-success">${householdBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+          </div>
+          {householdAccounts.map((account) => (
             <div
               key={account.id}
               data-testid={`balance-row-${account.id}`}
@@ -402,6 +416,88 @@ function BalancesTab() {
           ))}
         </CardContent>
       </Card>
+
+        {/* Business Column */}
+        <Card className="border-border bg-card shadow-lg">
+          <CardHeader className="pb-3 border-b border-border bg-secondary/20">
+            <CardTitle className="text-lg flex items-center gap-2 text-gold">
+              <Building2 className="w-5 h-5" /> Business Accounts
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 space-y-3">
+            {/* Business Total */}
+            <div className="p-3 rounded-lg bg-warning/10 border border-warning/30 mb-2">
+              <p className="text-xs text-muted-foreground uppercase font-bold mb-1">Total</p>
+              <p className="text-2xl font-bold font-mono text-warning">${businessBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+            </div>
+            {businessAccounts.length > 0 ? (
+              businessAccounts.map((account) => (
+                <div
+                  key={account.id}
+                  data-testid={`business-row-${account.id}`}
+                  className={`p-4 rounded-xl border transition-all ${
+                    editingBalance?.id === account.id ? "border-gold bg-gold/5" : "border-border bg-secondary/20"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-foreground truncate">{account.name}</p>
+                    </div>
+                    <div className="text-right">
+                      {editingBalance?.id === account.id ? (
+                        <div className="flex items-center gap-1">
+                          <span className="text-gold">$</span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            className="w-24 h-8 text-right font-mono font-bold bg-background text-gold"
+                            value={editingBalance.value}
+                            onChange={(e) => setEditingBalance({ id: account.id, value: e.target.value })}
+                            autoFocus
+                            data-testid={`input-business-${account.id}`}
+                          />
+                          <Button
+                            size="sm"
+                            onClick={() => handleSaveBalance(account.id, editingBalance.value)}
+                            disabled={updateAccount.isPending}
+                            className="h-8 px-2"
+                            data-testid={`btn-save-business-${account.id}`}
+                          >
+                            <Save className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 justify-end">
+                          <div>
+                            <p
+                              className={`text-xl font-bold font-mono cursor-pointer ${account.currentBalance >= 0 ? "text-gold" : "text-destructive"}`}
+                              onClick={() => setEditingBalance({ id: account.id, value: account.currentBalance.toFixed(2) })}
+                              data-testid={`text-business-${account.id}`}
+                            >
+                              ${account.currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">Current Balance</p>
+                          </div>
+                          <button
+                            onClick={() => setEditingBalance({ id: account.id, value: account.currentBalance.toFixed(2) })}
+                            className="p-1.5 rounded-lg text-muted-foreground hover:text-gold hover:bg-gold/10 transition-colors"
+                            data-testid={`btn-edit-business-${account.id}`}
+                            title="Edit balance"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-4">No business accounts yet</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Buckets & Set-Asides Card */}
       <Card className="border-border bg-card shadow-lg">
