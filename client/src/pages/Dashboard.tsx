@@ -19,6 +19,7 @@ import { startOfWeek, endOfWeek, isWithinInterval, startOfMonth, endOfMonth, for
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import WeeklyIncomeCard from "@/components/WeeklyIncomeCard";
 import { WeeklySnapshotCard } from "@/components/WeeklySnapshotCard";
+import { HouseFundTracker } from "@/components/HouseFundTracker";
 
 interface BillScheduleItem {
   id: number;
@@ -299,6 +300,9 @@ export default function Dashboard() {
 
         {/* Weekly Cash Flow Snapshot - P0 Priority */}
         <WeeklySnapshotCard />
+
+        {/* House Fund Tracker - P0 Priority */}
+        <HouseFundTracker />
 
         {/* Summary Cards */}
         <div className="grid grid-cols-2 gap-3">
