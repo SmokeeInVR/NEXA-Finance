@@ -81,23 +81,26 @@ Sprint 3 locked endpoint correctness with a comprehensive test suite and seeded 
 
 ---
 
-## Phase 3C: 24-Month Data Population
+## Phase 3C: 24-Month Data Population (Generation Only)
+
+**Status**: ✅ COMPLETE (Data Generated, NOT Persisted to Database)
 
 ### Files Created (4)
 1. **`server/seed-24month.js`** (executable seed runner)
    - Generates 104 weekly snapshots (Jan 2024 - Dec 2025)
    - Generates 144 bill payment records (6 bills × 24 months)
    - Validates data integrity before reporting completion
+   - **Output only** — does NOT insert into database
 
 2. **`server/seed-24month-snapshots.ts`** (snapshot generator)
-   - Weekly snapshot generation with date range
+   - Weekly snapshot generation with date range (2024-01-01 to 2025-12-22)
    - ~5% variance on income/expense/debt for realism
    - Status calculation based on deadline pace
-   - Exportable function for database insertion
+   - UTC date handling to prevent timezone drift
 
 3. **`server/seed-24month-bills.ts`** (payment history generator)
    - Recurring bills payment records
-   - Subscription auto-fill to reach monthly total
+   - Subscription auto-fill with validation (clamps negative to $0.00)
    - Date-based due-day alignment
    - 24-month payment history structure
 
@@ -106,50 +109,59 @@ Sprint 3 locked endpoint correctness with a comprehensive test suite and seeded 
    - Provides validation summary
    - Ready for integration into main seed flow
 
-### Data Generated
+### Data Generated ✅
 - **Snapshots**: 104 weekly records covering ~2 years
-  * Cumulative house fund: $13,366 - $13,372 (varies per run due to randomness)
+  * Date range: 2024-01-01 to 2025-12-22 (no timezone drift)
+  * Cumulative house fund: ~$13,366 - $13,453 (varies per run due to randomness)
   * On-track weeks: 53-62/104 (52-59%)
-  * Surplus range: $46.95 - $212.32
+  * Surplus range: $40.51 - $219.63
   * Status distribution reflects realistic variance
 
 - **Payment Records**: 144 payment records
   * 6 recurring bills × 24 months
-  * Total paid: $48,461.76
+  * Total paid: ~$48,536.62
   * Bills: Rent, Insurance, Internet, Utilities, Groceries, Subscriptions
   * Paid-date distribution matches due dates
+  * Subscription validation: 7 months flagged for negative residual (clamped to $0.00)
 
 ### Package.json Update
 - Added: `"seed:24month": "node server/seed-24month.js"`
 - Executable via: `npm run seed:24month`
+- **Output**: Prints validated sample data; ready for export/import
 
-### Data Validation
+### Data Validation ✅
 All generated data passes validation:
 - ✅ No null/undefined required fields
 - ✅ Amounts parseable as floats
-- ✅ Date format consistency (YYYY-MM-DD)
+- ✅ Date format consistency (YYYY-MM-DD), no timezone drift
 - ✅ Bill counts and monthly totals reconcile
 - ✅ Snapshot status logic correct
+- ✅ No negative amounts (7 months with residual underflow clamped to $0.00)
 
 ---
 
 ## Success Criteria Met
 
-### Phase 3A
+### Phase 3A ✅
 - ✅ Navigation already wired
 - ✅ Routes live
+- ✅ Status: Complete
 
-### Phase 3B
+### Phase 3B ✅
 - ✅ 39 tests covering 5 API endpoints
 - ✅ Math regression tests lock critical calculations
 - ✅ 100% pass rate
 - ✅ Floating-point tolerances correct
+- ✅ Status: Complete
 
-### Phase 3C
-- ✅ 24-month snapshot history ready
-- ✅ 24-month bill payment history ready
-- ✅ Data validation complete
-- ✅ Seed script executable via npm
+### Phase 3C ✅ (Generation Only)
+- ✅ 104 weekly snapshots generated and validated
+- ✅ 144 bill payment records generated and validated
+- ✅ Data validation complete (no timezone drift, no negative amounts)
+- ✅ Seed script executable via npm (`npm run seed:24month`)
+- ✅ Data ready for export/review
+- ⏸️ Database insertion: **DEFERRED to Phase 3E** (intentional separation)
+- ✅ Status: Data Generation Complete
 
 ---
 
@@ -160,15 +172,34 @@ All generated data passes validation:
 - Scope: Responsive UI improvements, mobile touch targets, tablet layouts
 - Trigger: After Phase 3B/3C approved for production
 
+### Phase 3E: Database Insertion (New Phase — Deferred Post-Sprint)
+- Status: ⏸️ DEFERRED (Phase 3C data generation complete; insertion pending)
+- Scope: Insert 104 generated snapshots into `weekly_snapshots` table
+- Scope: Insert 144 generated payment records into `bill_payments` table
+- Approach: Manual import tool OR auto-insert enhancement (TBD)
+- Target: Sprint 4 or post-launch when database layer is locked
+- Rationale: Separates data generation (complete) from persistence (safe to defer)
+
+**Why 3E is deferred:**
+- Allows manual review of generated data before DB commit
+- Prevents accidental duplicate inserts if seed runs multiple times
+- Enables flexible insert method (manual import, scheduled batch, or auto-insert flag)
+- Unblocks Sprint 3 closure (tests locked, data ready, insertion safe to schedule later)
+
 ---
 
 ## Next Steps
 
-1. **Database Integration**: Insert generated 24-month snapshots into `weekly_snapshots` table
-2. **Payment History**: Insert generated payment records into `bill_payments` table
-3. **Regression Test Lock**: Run full test suite before any further changes
-4. **Audit Trail**: Verify USDA documentation requirements met by historical data
-5. **Phase 3D**: Begin mobile/responsive refinements (scheduled for post-validation)
+**Immediate (Sprint 3 closure):**
+1. ✅ Phase 3B: API Test Suite locked (39 tests passing)
+2. ✅ Phase 3C: Data generation complete (104 snapshots + 144 payments)
+3. **Option A**: Proceed to Phase 3D (Mobile/Responsive refinements)
+4. **Option B**: Close Sprint 3 with 3C documented as generation-complete, defer 3D/3E
+
+**Later (Sprint 4 or post-launch):**
+1. **Phase 3E**: Insert generated data into database tables
+2. **Phase 3D**: Mobile/responsive refinements
+3. Add auto-insert flag to seed script (optional enhancement)
 
 ---
 
