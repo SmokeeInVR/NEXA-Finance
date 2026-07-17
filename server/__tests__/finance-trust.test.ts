@@ -147,11 +147,16 @@ describe("Finance trust foundation", () => {
     assert.equal(summary.obligations.cashRequiredThisPeriod, 40);
   });
 
-  it("blocks debt recommendation until allowance is explicitly configured", () => {
+  it("blocks debt recommendation until the personal-flex policy is explicitly configured", () => {
     const result = calculateSafeExtraPayment({ cashAvailable: 5000, upcomingObligations: 0, variableReserves: 0, bufferFloor: 0, personalAllowance: 0, personalAllowanceConfigured: false, debts: [{ id: 1, name: "Visa", balance: 100, monthlyPayment: 20 }] });
     assert.equal(result.safeExtraPayment, 0);
     assert.equal(result.targetDebt, null);
-    assert.deepEqual(result.blocking, ["personal allowance is not configured"]);
+    assert.deepEqual(result.blocking, ["personal-flex policy is not configured"]);
+  });
+
+  it("describes zero-safe-surplus protection as personal flex", () => {
+    const result = calculateSafeExtraPayment({ cashAvailable: 100, upcomingObligations: 100, variableReserves: 0, bufferFloor: 0, personalAllowance: 0, personalAllowanceConfigured: true, debts: [{ id: 1, name: "Visa", balance: 100, monthlyPayment: 20 }] });
+    assert.deepEqual(result.blocking, ["upcoming obligations, variable reserves, buffer floor, or remaining personal flex"]);
   });
   it("validates the versioned meal estimate seam without creating a transaction", () => {
     const event = mealEstimateEventSchema.parse({ contractVersion: "1", planId: "plan-1", weekStart: "2026-07-06", weekEnd: "2026-07-12", currency: "USD", estimateAmount: 85, generatedAt: "2026-07-06T12:00:00.000Z", source: "meal-planner/v1", idempotencyKey: "plan-1:2026-07-06" });

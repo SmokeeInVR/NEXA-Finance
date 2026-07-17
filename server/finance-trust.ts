@@ -137,17 +137,17 @@ export function calculateSafeExtraPayment(input: {
   debts: Array<{ id: number; name: string; balance: number; apr?: number | null; monthlyPayment: number; isCar?: boolean; excludeFromExtraPaydown?: boolean }>;
   strategy?: "avalanche" | "snowball";
 }) {
-  const allowanceConfigured = input.personalAllowanceConfigured !== false;
+  const personalFlexPolicyConfigured = input.personalAllowanceConfigured !== false;
   const protectedAmount = Math.max(0, input.upcomingObligations) + Math.max(0, input.variableReserves) + Math.max(0, input.bufferFloor) + Math.max(0, input.personalAllowance) + Math.max(0, input.spouseAllowance || 0) + Math.max(0, input.personalFlexRemaining || 0);
   const available = Math.max(0, input.cashAvailable - protectedAmount);
   const targets = input.debts.filter((debt) => !debt.excludeFromExtraPaydown && !debt.isCar && !/car|auto|vehicle/i.test(debt.name) && debt.balance > 0);
   const strategy = input.strategy || "avalanche";
   targets.sort((a, b) => strategy === "snowball" ? a.balance - b.balance : (b.apr || 0) - (a.apr || 0));
-  const target = allowanceConfigured ? (targets[0] || null) : null;
-  const safeExtra = allowanceConfigured && target ? Math.min(available, target.balance) : 0;
+  const target = personalFlexPolicyConfigured ? (targets[0] || null) : null;
+  const safeExtra = personalFlexPolicyConfigured && target ? Math.min(available, target.balance) : 0;
   return { strategy, targetDebt: target, safeExtraPayment: Math.round(safeExtra * 100) / 100, protectedAmount: Math.round(protectedAmount * 100) / 100, blocking: [
-    ...(!allowanceConfigured ? ["personal allowance is not configured"] : []),
-    ...(allowanceConfigured && available <= 0 ? ["upcoming obligations, variable reserves, buffer floor, or personal allowance"] : []),
+    ...(!personalFlexPolicyConfigured ? ["personal-flex policy is not configured"] : []),
+    ...(personalFlexPolicyConfigured && available <= 0 ? ["upcoming obligations, variable reserves, buffer floor, or remaining personal flex"] : []),
   ], bufferProtectionPolicy: "full buffer goal reserved", recommendationIsReadOnly: true, paymentMutationTriggered: false };
 }
 

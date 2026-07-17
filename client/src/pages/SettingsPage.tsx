@@ -172,31 +172,10 @@ function SetupTab() {
               />
               <FormField
                 control={form.control}
-                name="myAllowance"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Me Allowance</FormLabel>
-                    <FormControl><MoneyInput label="" {...field} value={field.value?.toString() || "0"} className="h-11 bg-secondary border-border text-foreground" /></FormControl>
-                    <FormDescription className="text-xs">Required before Finance can recommend extra debt payment.</FormDescription>
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="spouseAllowance"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Spouse Allowance</FormLabel>
-                    <FormControl><MoneyInput label="" {...field} value={field.value?.toString() || "0"} className="h-11 bg-secondary border-border text-foreground" /></FormControl>
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
                 name="allowanceConfigured"
                 render={({ field }) => (
                   <FormItem className="flex items-center justify-between rounded-lg border border-border p-3">
-                    <div><FormLabel>Allow debt recommendation</FormLabel><FormDescription>Explicitly confirm these allowances are configured.</FormDescription></div>
+                    <div><FormLabel>Enable read-only debt recommendation</FormLabel><FormDescription>Confirm the Personal Flex policy is configured. Finance will never make a payment or transfer.</FormDescription></div>
                     <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
                   </FormItem>
                 )}
