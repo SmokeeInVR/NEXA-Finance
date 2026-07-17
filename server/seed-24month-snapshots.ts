@@ -1,4 +1,5 @@
 import { parse } from "date-fns";
+import { pathToFileURL } from "url";
 
 // 24-month snapshot seed: Jan 2024 - Dec 2025 (104 weekly snapshots)
 // Fixed baseline: income 1030 - expense 738 - debt 161 = surplus 131
@@ -79,8 +80,12 @@ async function seedSnapshots() {
 // Export for use in other modules
 export { generateWeeklySnapshots, seedSnapshots };
 
+const isMainModule = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
 // Run if called directly
-if (require.main === module) {
+if (isMainModule) {
   seedSnapshots().then(snapshots => {
     console.log(`\nSnapshot array (first 5):`);
     console.log(JSON.stringify(snapshots.slice(0, 5), null, 2));

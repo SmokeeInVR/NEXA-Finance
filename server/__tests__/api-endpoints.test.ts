@@ -18,12 +18,11 @@ describe("API Endpoints", () => {
     });
 
     it("snapshot baseline reconciles: income - expense - debt = surplus", () => {
-      // Math lock: 1030 - 738 - 161 = 131
       const income = 1030;
-      const expense = 738;
+      const expense = 751.53;
       const debt = 161;
       const expectedSurplus = income - expense - debt;
-      assert.equal(expectedSurplus, 131);
+      assert.ok(Math.abs(expectedSurplus - 117.47) < 0.01);
     });
 
     it("returns data ordered by date descending", () => {
@@ -46,10 +45,10 @@ describe("API Endpoints", () => {
       const requiredFields = ["weekStartDate", "householdIncome", "householdExpense", "debtPayment", "surplus"];
       const mockSnapshot = {
         weekStartDate: "2026-06-14",
-        householdIncome: "1030",
-        householdExpense: "738",
-        debtPayment: "161",
-        surplus: "131",
+        householdIncome: "1030.00",
+        householdExpense: "751.53",
+        debtPayment: "161.00",
+        surplus: "117.47",
       };
       requiredFields.forEach(field => {
         assert.ok(field in mockSnapshot, `Missing field: ${field}`);
@@ -63,14 +62,17 @@ describe("API Endpoints", () => {
       assert.ok(Array.isArray(billsRegistry));
     });
 
-    it("separates recurring and one-time bills", () => {
+    it("separates active recurring, future recurring, and one-time bills", () => {
       const mockBills = [
-        { id: 1, name: "Rent", endDate: null }, // recurring
-        { id: 2, name: "Move-in", endDate: "2026-08-14" }, // one-time
+        { id: 1, name: "Apartment Rent (Current Lease)", startDate: "2026-06-14", endDate: "2026-08-13" },
+        { id: 2, name: "Apartment Rent (New Apartment)", startDate: "2026-08-14", endDate: null },
+        { id: 3, name: "Move-in", startDate: "2026-08-14", endDate: "2026-08-14" },
       ];
-      const recurring = mockBills.filter(b => !b.endDate);
-      const oneTime = mockBills.filter(b => b.endDate);
-      assert.equal(recurring.length, 1);
+      const activeRecurring = mockBills.filter(b => b.startDate < "2026-08-14" && b.endDate !== b.startDate);
+      const futureRecurring = mockBills.filter(b => b.startDate >= "2026-08-14" && !b.endDate);
+      const oneTime = mockBills.filter(b => b.endDate === b.startDate);
+      assert.equal(activeRecurring.length, 1);
+      assert.equal(futureRecurring.length, 1);
       assert.equal(oneTime.length, 1);
     });
 
@@ -85,26 +87,25 @@ describe("API Endpoints", () => {
       assert.equal(sorted[sorted.length - 1].dueDay, 14);
     });
 
-    it("monthly total reconciles to $2,596.12 (6 recurring + 1 one-time)", () => {
-      const recurringTotal = 2019.24; // 1317 + 229.96 + 124 + 195.53 + 152.75
+    it("current monthly baseline reconciles to $3,229.12 with current lease + move-in", () => {
+      const recurringTotal = 2652.24; // 1950 + 229.96 + 124 + 195.53 + 152.75
       const oneTimeTotal = 576.88;
       const totalMonthly = recurringTotal + oneTimeTotal;
-      assert.ok(Math.abs(totalMonthly - 2596.12) < 0.01);
+      assert.ok(Math.abs(totalMonthly - 3229.12) < 0.01);
     });
 
-    it("weekly total reconciles to ~$599/week (2596.12 / 4.33)", () => {
-      const monthlyTotal = 2596.12;
+    it("weekly active recurring baseline reconciles to ~$612.53/week (2652.24 / 4.33)", () => {
+      const monthlyTotal = 2652.24;
       const weeklyTotal = monthlyTotal / 4.33;
-      // Weekly target used in UI is $599; calculated is ~$599.58
-      assert.ok(weeklyTotal > 599 && weeklyTotal < 600);
+      assert.ok(weeklyTotal > 612 && weeklyTotal < 613);
     });
 
     it("all bills have required fields", () => {
       const requiredFields = ["id", "name", "amount", "dueDay", "category"];
       const mockBill = {
         id: 1,
-        name: "Rent",
-        amount: "1317.00",
+        name: "Apartment Rent (Current Lease)",
+        amount: "1950.00",
         dueDay: 3,
         category: "HOUSING",
       };

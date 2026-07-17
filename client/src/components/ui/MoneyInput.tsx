@@ -3,7 +3,7 @@ import { Input } from "@/components/ui/input";
 import React from "react";
 
 interface MoneyInputProps extends React.ComponentProps<typeof Input> {
-  label: string;
+  label?: string;
 }
 
 export const MoneyInput = React.forwardRef<HTMLInputElement, MoneyInputProps>(

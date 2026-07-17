@@ -1,19 +1,20 @@
 import express from "express";
 import type { Express } from "express";
 import type { Server } from "http";
-import { storage } from "./storage";
+import type { IStorage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { Parser } from "json2csv";
 import { PlaidApi, PlaidEnvironments, Configuration, Products, CountryCode } from 'plaid';
+import { mealEstimateEventSchema, financeObligationInputSchema, normalizeCompatibilityObligation, buildTrustSummary } from "./finance-trust";
 
 export async function registerRoutes(
   httpServer: Server,
-  app: Express
+  app: Express,
+  providedStore?: IStorage
 ): Promise<Server> {
-  
-  // Run migrations on startup
-  await storage.markBillsPoolAsExcluded();
+  const store = providedStore || (await import("./storage")).storage;
+  await store.markBillsPoolAsExcluded();
 
   // ── Plaid Client Setup ──
   const plaidConfig = new Configuration({
@@ -27,8 +28,55 @@ export async function registerRoutes(
   });
   const plaidClient = new PlaidApi(plaidConfig);
 
-  // In-memory token store — resets on redeploy. Upgrade to DB in Phase 4.
+  // Persistent token store backed by DB so bank links survive restarts.
   const plaidTokenStore = new Map<string, { accessToken: string; institutionName: string; accounts: any[] }>();
+  const persistedPlaidConnections = await store.getPlaidConnections();
+  for (const connection of persistedPlaidConnections) {
+    plaidTokenStore.set(connection.itemId, {
+      accessToken: connection.accessToken,
+      institutionName: connection.institutionName,
+      accounts: connection.accounts || [],
+    });
+  }
+
+  const getPlaidClassification = (account: any) => {
+    if (account.type === "credit" || account.type === "loan") return "debt";
+    if (account.type === "depository") return "cash";
+    if (account.type === "investment") return "investment";
+    return "other";
+  };
+
+  const getPlaidDebtKind = (account: any) => {
+    if (account.type === "credit") return "credit_card";
+    if (account.type === "loan") {
+      return account.subtype === "auto" ? "auto_loan" : "loan";
+    }
+    return null;
+  };
+
+  const mergePlaidAccountMetadata = (liveAccounts: any[], storedAccounts: any[] = []) => {
+    const storedById = new Map(storedAccounts.map((account) => [account.accountId, account]));
+
+    return liveAccounts.map((account) => {
+      const stored = storedById.get(account.accountId) || {};
+      const customName = typeof stored.customName === "string" ? stored.customName.trim() : "";
+      const ownerTag = typeof stored.ownerTag === "string" ? stored.ownerTag.trim() : "";
+      const ledgerAccountIdRaw = stored.ledgerAccountId;
+      const ledgerAccountId = ledgerAccountIdRaw == null || ledgerAccountIdRaw === ""
+        ? null
+        : Number(ledgerAccountIdRaw);
+
+      return {
+        ...account,
+        customName: customName || null,
+        ownerTag: ownerTag || null,
+        ledgerAccountId: Number.isNaN(ledgerAccountId) ? null : ledgerAccountId,
+        displayName: customName || account.name,
+        classification: getPlaidClassification(account),
+        debtKind: getPlaidDebtKind(account),
+      };
+    });
+  };
 
   const legacyBalanceAccountMap: Record<string, string> = {
     "My Checking": "Personal Checking (Me)",
@@ -41,7 +89,7 @@ export async function registerRoutes(
   };
 
   const getLegacyBalancesSnapshot = async () => {
-    const accountsWithBalances = await storage.getAccountsWithBalances();
+    const accountsWithBalances = await store.getAccountsWithBalances();
     return Object.entries(legacyBalanceAccountMap).map(([legacyName, accountName]) => {
       const account = accountsWithBalances.find((entry) => entry.name === accountName);
       return {
@@ -55,19 +103,19 @@ export async function registerRoutes(
   
   // === ACCOUNTS (LEDGER SYSTEM) ===
   app.get(api.accounts.list.path, async (_req, res) => {
-    const accountsList = await storage.getAccounts();
+    const accountsList = await store.getAccounts();
     res.json(accountsList);
   });
 
   app.get(api.accounts.listWithBalances.path, async (_req, res) => {
-    const accountsWithBalances = await storage.getAccountsWithBalances();
+    const accountsWithBalances = await store.getAccountsWithBalances();
     res.json(accountsWithBalances);
   });
 
   app.post(api.accounts.create.path, async (req, res) => {
     try {
       const input = api.accounts.create.input.parse(req.body);
-      const account = await storage.createAccount(input);
+      const account = await store.createAccount(input);
       res.status(201).json(account);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input", errors: err.errors }); return; }
@@ -80,7 +128,7 @@ export async function registerRoutes(
     try {
       const id = Number(req.params.id);
       const input = api.accounts.update.input.parse(req.body);
-      const account = await storage.updateAccount(id, input);
+      const account = await store.updateAccount(id, input);
       res.json(account);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input", errors: err.errors }); return; }
@@ -90,13 +138,13 @@ export async function registerRoutes(
   });
 
   app.delete(api.accounts.delete.path, async (req, res) => {
-    await storage.deleteAccount(Number(req.params.id));
+    await store.deleteAccount(Number(req.params.id));
     res.sendStatus(204);
   });
 
   app.post(api.accounts.seed.path, async (_req, res) => {
-    const accountsList = await storage.seedDefaultAccounts();
-    await storage.markBillsPoolAsExcluded();
+    const accountsList = await store.seedDefaultAccounts();
+    await store.markBillsPoolAsExcluded();
     res.json(accountsList);
   });
 
@@ -107,14 +155,14 @@ export async function registerRoutes(
     if (req.query.endDate) options.endDate = String(req.query.endDate);
     if (req.query.type) options.type = String(req.query.type);
     if (req.query.accountId) options.accountId = Number(req.query.accountId);
-    const txList = await storage.getTransactions(options);
+    const txList = await store.getTransactions(options);
     res.json(txList);
   });
 
   app.post(api.transactions.create.path, async (req, res) => {
     try {
       const input = api.transactions.create.input.parse(req.body);
-      const transaction = await storage.createTransaction(input);
+      const transaction = await store.createTransaction(input);
       res.status(201).json(transaction);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input", errors: err.errors }); return; }
@@ -124,25 +172,25 @@ export async function registerRoutes(
   });
 
   app.delete(api.transactions.delete.path, async (req, res) => {
-    await storage.deleteTransaction(Number(req.params.id));
+    await store.deleteTransaction(Number(req.params.id));
     res.sendStatus(204);
   });
 
   // === DEBTS WITH PAYMENTS ===
   app.get("/api/debts/with-payments", async (_req, res) => {
-    const debtsWithPayments = await storage.getDebtsWithPayments();
+    const debtsWithPayments = await store.getDebtsWithPayments();
     res.json(debtsWithPayments);
   });
 
   // === BUDGET ===
   app.get(api.budget.get.path, async (_req, res) => {
-    const settings = await storage.getBudgetSettings();
+    const settings = await store.getBudgetSettings();
     const defaultSettings = {
       id: 0, monthlyFixedBills: "0", splitMode: "AUTO", mySplitPct: "50", spouseSplitPct: "50",
       savingsMode: "PERCENT", savingsValue: "0", investingMode: "PERCENT", investingValue: "0",
       debtBufferMode: "PERCENT", debtBufferValue: "0", tradingMode: "PERCENT", tradingValue: "0",
       allocationFrequency: "MONTHLY", incomeSource: "MANUAL", avgWindowWeeks: 4,
-      bufferGoalAmount: "1000", bufferRerouteEnabled: false, rerouteTarget: "SAVINGS", updatedAt: new Date()
+      bufferGoalAmount: "1000", myAllowance: "0", spouseAllowance: "0", allowanceConfigured: false, bufferRerouteEnabled: false, rerouteTarget: "SAVINGS", updatedAt: new Date()
     };
     res.json(settings || defaultSettings);
   });
@@ -150,7 +198,7 @@ export async function registerRoutes(
   app.post(api.budget.update.path, async (req, res) => {
     try {
       const input = api.budget.update.input.parse(req.body);
-      const settings = await storage.updateBudgetSettings(input);
+      const settings = await store.updateBudgetSettings(input);
       res.json(settings);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input", errors: err.errors }); return; }
@@ -161,14 +209,14 @@ export async function registerRoutes(
 
   // === SPENDING ===
   app.get(api.spending.list.path, async (_req, res) => {
-    const logs = await storage.getSpendingLogs();
+    const logs = await store.getSpendingLogs();
     res.json(logs);
   });
 
   app.post(api.spending.create.path, async (req, res) => {
     try {
       const input = api.spending.create.input.parse(req.body);
-      const log = await storage.createSpendingLog(input);
+      const log = await store.createSpendingLog(input);
       res.status(201).json(log);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input" }); return; }
@@ -177,20 +225,20 @@ export async function registerRoutes(
   });
 
   app.delete(api.spending.delete.path, async (req, res) => {
-    await storage.deleteSpendingLog(Number(req.params.id));
+    await store.deleteSpendingLog(Number(req.params.id));
     res.sendStatus(204);
   });
 
   // === DEBTS ===
   app.get(api.debts.list.path, async (_req, res) => {
-    const debts = await storage.getDebts();
+    const debts = await store.getDebts();
     res.json(debts);
   });
 
   app.post(api.debts.create.path, async (req, res) => {
     try {
       const input = api.debts.create.input.parse(req.body);
-      const debt = await storage.createDebt(input);
+      const debt = await store.createDebt(input);
       res.status(201).json(debt);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input" }); return; }
@@ -201,7 +249,7 @@ export async function registerRoutes(
   app.patch(api.debts.update.path, async (req, res) => {
     try {
       const input = api.debts.update.input.parse(req.body);
-      const updated = await storage.updateDebt(Number(req.params.id), input.balance);
+      const updated = await store.updateDebt(Number(req.params.id), input.balance);
       res.json(updated);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input" }); return; }
@@ -210,20 +258,20 @@ export async function registerRoutes(
   });
 
   app.delete(api.debts.delete.path, async (req, res) => {
-    await storage.deleteDebt(Number(req.params.id));
+    await store.deleteDebt(Number(req.params.id));
     res.sendStatus(204);
   });
 
   // === BUSINESS EXPENSES ===
   app.get(api.business.expenses.list.path, async (_req, res) => {
-    const expenses = await storage.getBusinessExpenses();
+    const expenses = await store.getBusinessExpenses();
     res.json(expenses);
   });
 
   app.post(api.business.expenses.create.path, async (req, res) => {
     try {
       const input = api.business.expenses.create.input.parse(req.body);
-      const expense = await storage.createBusinessExpense(input);
+      const expense = await store.createBusinessExpense(input);
       res.status(201).json(expense);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input" }); return; }
@@ -232,20 +280,20 @@ export async function registerRoutes(
   });
 
   app.delete(api.business.expenses.delete.path, async (req, res) => {
-    await storage.deleteBusinessExpense(Number(req.params.id));
+    await store.deleteBusinessExpense(Number(req.params.id));
     res.sendStatus(204);
   });
 
   // === MILEAGE ===
   app.get(api.business.mileage.list.path, async (_req, res) => {
-    const entries = await storage.getMileageEntries();
+    const entries = await store.getMileageEntries();
     res.json(entries);
   });
 
   app.post(api.business.mileage.create.path, async (req, res) => {
     try {
       const input = api.business.mileage.create.input.parse(req.body);
-      const entry = await storage.createMileageEntry(input);
+      const entry = await store.createMileageEntry(input);
       res.status(201).json(entry);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input" }); return; }
@@ -254,20 +302,20 @@ export async function registerRoutes(
   });
 
   app.delete(api.business.mileage.delete.path, async (req, res) => {
-    await storage.deleteMileageEntry(Number(req.params.id));
+    await store.deleteMileageEntry(Number(req.params.id));
     res.sendStatus(204);
   });
 
   // === BUSINESS INCOME ===
   app.get(api.business.income.list.path, async (_req, res) => {
-    const income = await storage.getBusinessIncomeLogs();
+    const income = await store.getBusinessIncomeLogs();
     res.json(income);
   });
 
   app.post(api.business.income.create.path, async (req, res) => {
     try {
       const input = api.business.income.create.input.parse(req.body);
-      const log = await storage.createBusinessIncomeLog(input);
+      const log = await store.createBusinessIncomeLog(input);
       res.status(201).json(log);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input" }); return; }
@@ -276,20 +324,20 @@ export async function registerRoutes(
   });
 
   app.delete(api.business.income.delete.path, async (req, res) => {
-    await storage.deleteBusinessIncomeLog(Number(req.params.id));
+    await store.deleteBusinessIncomeLog(Number(req.params.id));
     res.sendStatus(204);
   });
 
   // === BUSINESS SETTINGS ===
   app.get(api.business.settings.get.path, async (_req, res) => {
-    const settings = await storage.getBusinessSettings();
+    const settings = await store.getBusinessSettings();
     res.json(settings || { taxHoldPercent: "25" });
   });
 
   app.post(api.business.settings.update.path, async (req, res) => {
     try {
       const input = api.business.settings.update.input.parse(req.body);
-      const settings = await storage.updateBusinessSettings(input);
+      const settings = await store.updateBusinessSettings(input);
       res.json(settings);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input" }); return; }
@@ -299,7 +347,7 @@ export async function registerRoutes(
 
   // === INCOME LOG ===
   app.get(api.income.list.path, async (_req, res) => {
-    const logs = await storage.getWeeklyIncomeLogs();
+    const logs = await store.getWeeklyIncomeLogs();
     res.json(logs);
   });
 
@@ -308,27 +356,27 @@ export async function registerRoutes(
       console.log("POST /api/income - Body:", req.body);
       const input = api.income.create.input.parse(req.body);
       console.log("POST /api/income - Parsed input:", input);
-      const existingLogs = await storage.getWeeklyIncomeLogs();
+      const existingLogs = await store.getWeeklyIncomeLogs();
       const existingLog = existingLogs.find(log => log.weekStartDate === input.weekStartDate);
       const shouldDeposit = input.deposited && !existingLog?.deposited;
-      const log = await storage.upsertWeeklyIncomeLog(input);
+      const log = await store.upsertWeeklyIncomeLog(input);
       console.log("POST /api/income - Upsert result:", log);
       if (shouldDeposit) {
         const myAmount = parseFloat(String(input.myIncome || 0));
         const spouseAmount = parseFloat(String(input.spouseIncome || 0));
         if (myAmount > 0 && input.myDepositAccountId) {
-          const myAccount = await storage.getAccountById(input.myDepositAccountId);
+          const myAccount = await store.getAccountById(input.myDepositAccountId);
           if (myAccount) {
             const newBalance = parseFloat(myAccount.startingBalance || "0") + myAmount;
-            await storage.updateAccount(input.myDepositAccountId, { startingBalance: String(newBalance) });
+            await store.updateAccount(input.myDepositAccountId, { startingBalance: String(newBalance) });
             console.log(`Deposited $${myAmount} to account ${myAccount.name}`);
           }
         }
         if (spouseAmount > 0 && input.spouseDepositAccountId) {
-          const spouseAccount = await storage.getAccountById(input.spouseDepositAccountId);
+          const spouseAccount = await store.getAccountById(input.spouseDepositAccountId);
           if (spouseAccount) {
             const newBalance = parseFloat(spouseAccount.startingBalance || "0") + spouseAmount;
-            await storage.updateAccount(input.spouseDepositAccountId, { startingBalance: String(newBalance) });
+            await store.updateAccount(input.spouseDepositAccountId, { startingBalance: String(newBalance) });
             console.log(`Deposited $${spouseAmount} to account ${spouseAccount.name}`);
           }
         }
@@ -342,7 +390,7 @@ export async function registerRoutes(
   });
 
   app.delete(api.income.delete.path, async (req, res) => {
-    await storage.deleteWeeklyIncomeLog(Number(req.params.id));
+    await store.deleteWeeklyIncomeLog(Number(req.params.id));
     res.sendStatus(204);
   });
 
@@ -361,7 +409,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/income/latest", async (req, res) => {
-    const logs = await storage.getWeeklyIncomeLogs();
+    const logs = await store.getWeeklyIncomeLogs();
     const now = new Date();
     const day = now.getDay();
     const diff = (day === 0 ? -6 : 1) - day;
@@ -395,7 +443,7 @@ export async function registerRoutes(
   app.post(api.balances.update.path, async (req, res) => {
     try {
       const input = api.balances.update.input.parse(req.body);
-      const accountsWithBalances = await storage.getAccountsWithBalances();
+      const accountsWithBalances = await store.getAccountsWithBalances();
 
       for (const balanceUpdate of input) {
         const mappedAccountName = legacyBalanceAccountMap[balanceUpdate.name];
@@ -420,7 +468,7 @@ export async function registerRoutes(
         const transactionDelta = account.currentBalance - startingBalance;
         const newStartingBalance = desiredBalance - transactionDelta;
 
-        await storage.updateAccount(account.id, {
+        await store.updateAccount(account.id, {
           startingBalance: newStartingBalance.toFixed(2),
         });
       }
@@ -435,7 +483,7 @@ export async function registerRoutes(
 
   // === BILLS FUNDING ===
   app.get(api.billsFunding.list.path, async (_req, res) => {
-    const logs = await storage.getBillsFundingLogs();
+    const logs = await store.getBillsFundingLogs();
     res.json(logs);
   });
 
@@ -445,7 +493,7 @@ export async function registerRoutes(
       const myAmount = parseFloat(input.myTransfer || "0");
       const spouseAmount = parseFloat(input.spouseTransfer || "0");
       const totalFunding = myAmount + spouseAmount;
-      const existingLogs = await storage.getBillsFundingLogs();
+      const existingLogs = await store.getBillsFundingLogs();
       const existingLog = existingLogs.find(l => l.weekStartDate === input.weekStartDate);
       const previousMy = existingLog ? parseFloat(existingLog.myTransfer || "0") : 0;
       const previousSpouse = existingLog ? parseFloat(existingLog.spouseTransfer || "0") : 0;
@@ -453,9 +501,9 @@ export async function registerRoutes(
       const fundingDelta = totalFunding - previousTotal;
       const myDelta = myAmount - previousMy;
       const spouseDelta = spouseAmount - previousSpouse;
-      const log = await storage.upsertBillsFundingLog(input);
+      const log = await store.upsertBillsFundingLog(input);
       if (myDelta !== 0 || spouseDelta !== 0 || fundingDelta !== 0) {
-        const accts = await storage.getAccountsWithBalances();
+        const accts = await store.getAccountsWithBalances();
         const personalChecking = accts.find(a => a.name === "Personal Checking (Me)");
         const spouseChecking = accts.find(a => a.name === "Spouse Checking");
         const jointChecking = accts.find(a => a.name === "Joint Checking");
@@ -463,16 +511,16 @@ export async function registerRoutes(
         if (myDelta !== 0 && personalChecking && jointChecking) {
           const fromId = myDelta > 0 ? personalChecking.id : jointChecking.id;
           const toId = myDelta > 0 ? jointChecking.id : personalChecking.id;
-          await storage.createTransfer({ date: input.weekStartDate, fromAccountId: fromId, toAccountId: toId, amount: String(Math.abs(myDelta)), note: `Bills funding ${myDelta > 0 ? '' : 'adjustment '}(Me) - Week of ${input.weekStartDate}`, createdBy: "Me" });
+          await store.createTransfer({ date: input.weekStartDate, fromAccountId: fromId, toAccountId: toId, amount: String(Math.abs(myDelta)), note: `Bills funding ${myDelta > 0 ? '' : 'adjustment '}(Me) - Week of ${input.weekStartDate}`, createdBy: "Me" });
         }
         if (spouseDelta !== 0 && spouseChecking && jointChecking) {
           const fromId = spouseDelta > 0 ? spouseChecking.id : jointChecking.id;
           const toId = spouseDelta > 0 ? jointChecking.id : spouseChecking.id;
-          await storage.createTransfer({ date: input.weekStartDate, fromAccountId: fromId, toAccountId: toId, amount: String(Math.abs(spouseDelta)), note: `Bills funding ${spouseDelta > 0 ? '' : 'adjustment '}(Spouse) - Week of ${input.weekStartDate}`, createdBy: "Spouse" });
+          await store.createTransfer({ date: input.weekStartDate, fromAccountId: fromId, toAccountId: toId, amount: String(Math.abs(spouseDelta)), note: `Bills funding ${spouseDelta > 0 ? '' : 'adjustment '}(Spouse) - Week of ${input.weekStartDate}`, createdBy: "Spouse" });
         }
         if (fundingDelta !== 0 && billsPool) {
           const newBillsBalance = parseFloat(billsPool.startingBalance || "0") + fundingDelta;
-          await storage.updateAccount(billsPool.id, { startingBalance: newBillsBalance.toFixed(2) });
+          await store.updateAccount(billsPool.id, { startingBalance: newBillsBalance.toFixed(2) });
         }
       }
       res.json(log);
@@ -486,29 +534,29 @@ export async function registerRoutes(
   app.delete("/api/bills-funding/:weekStartDate", async (req, res) => {
     try {
       const weekStartDate = req.params.weekStartDate;
-      const logs = await storage.getBillsFundingLogs();
+      const logs = await store.getBillsFundingLogs();
       const existingLog = logs.find(l => l.weekStartDate === weekStartDate);
       if (existingLog) {
         const myAmount = parseFloat(existingLog.myTransfer || "0");
         const spouseAmount = parseFloat(existingLog.spouseTransfer || "0");
         const totalToRemove = myAmount + spouseAmount;
-        const accts = await storage.getAccountsWithBalances();
+        const accts = await store.getAccountsWithBalances();
         const personalChecking = accts.find(a => a.name === "Personal Checking (Me)");
         const spouseChecking = accts.find(a => a.name === "Spouse Checking");
         const jointChecking = accts.find(a => a.name === "Joint Checking");
         const billsPool = accts.find(a => a.name === "Bills Pool");
         if (myAmount > 0 && personalChecking && jointChecking) {
-          await storage.createTransfer({ date: weekStartDate, fromAccountId: jointChecking.id, toAccountId: personalChecking.id, amount: String(myAmount), note: `Bills funding reversal (Me) - Week of ${weekStartDate}`, createdBy: "Me" });
+          await store.createTransfer({ date: weekStartDate, fromAccountId: jointChecking.id, toAccountId: personalChecking.id, amount: String(myAmount), note: `Bills funding reversal (Me) - Week of ${weekStartDate}`, createdBy: "Me" });
         }
         if (spouseAmount > 0 && spouseChecking && jointChecking) {
-          await storage.createTransfer({ date: weekStartDate, fromAccountId: jointChecking.id, toAccountId: spouseChecking.id, amount: String(spouseAmount), note: `Bills funding reversal (Spouse) - Week of ${weekStartDate}`, createdBy: "Spouse" });
+          await store.createTransfer({ date: weekStartDate, fromAccountId: jointChecking.id, toAccountId: spouseChecking.id, amount: String(spouseAmount), note: `Bills funding reversal (Spouse) - Week of ${weekStartDate}`, createdBy: "Spouse" });
         }
         if (totalToRemove > 0 && billsPool) {
           const newBillsBalance = parseFloat(billsPool.startingBalance || "0") - totalToRemove;
-          await storage.updateAccount(billsPool.id, { startingBalance: newBillsBalance.toFixed(2) });
+          await store.updateAccount(billsPool.id, { startingBalance: newBillsBalance.toFixed(2) });
         }
       }
-      await storage.deleteBillsFundingLog(weekStartDate);
+      await store.deleteBillsFundingLog(weekStartDate);
       res.json({ success: true });
     } catch (err) {
       console.error("Delete bills funding error:", err);
@@ -521,12 +569,12 @@ export async function registerRoutes(
     const type = req.params.type;
     let data: any[] = [];
     let fields: string[] = [];
-    if (type === 'expenses') { data = await storage.getBusinessExpenses(); fields = ['date', 'vendor', 'category', 'amount', 'notes', 'createdAt']; }
-    else if (type === 'mileage') { data = await storage.getMileageEntries(); fields = ['date', 'miles', 'purpose', 'createdAt']; }
-    else if (type === 'debts') { data = await storage.getDebts(); fields = ['name', 'balance', 'apr', 'monthlyPayment', 'createdAt']; }
-    else if (type === 'income') { data = await storage.getWeeklyIncomeLogs(); fields = ['weekStartDate', 'myIncome', 'spouseIncome', 'notes', 'createdAt']; }
+    if (type === 'expenses') { data = await store.getBusinessExpenses(); fields = ['date', 'vendor', 'category', 'amount', 'notes', 'createdAt']; }
+    else if (type === 'mileage') { data = await store.getMileageEntries(); fields = ['date', 'miles', 'purpose', 'createdAt']; }
+    else if (type === 'debts') { data = await store.getDebts(); fields = ['name', 'balance', 'apr', 'monthlyPayment', 'createdAt']; }
+    else if (type === 'income') { data = await store.getWeeklyIncomeLogs(); fields = ['weekStartDate', 'myIncome', 'spouseIncome', 'notes', 'createdAt']; }
     else if (type === 'balances') { data = await getLegacyBalancesSnapshot(); fields = ['name', 'balance', 'updatedAt']; }
-    else if (type === 'spending') { data = await storage.getSpendingLogs(); fields = ['date', 'amount', 'category', 'paidBy', 'notes', 'createdAt']; }
+    else if (type === 'spending') { data = await store.getSpendingLogs(); fields = ['date', 'amount', 'category', 'paidBy', 'notes', 'createdAt']; }
     else { res.status(400).send("Invalid export type"); return; }
     try {
       const json2csvParser = new Parser({ fields });
@@ -542,14 +590,14 @@ export async function registerRoutes(
 
   // === INVESTMENT SETTINGS (FIRE Planning) ===
   app.get(api.investment.get.path, async (_req, res) => {
-    const settings = await storage.getInvestmentSettings();
+    const settings = await store.getInvestmentSettings();
     res.json(settings || { investedBalance: "0", monthlyContribution: "0", safeWithdrawalRate: "0.04", targetMonthlyIncome: "2000", expectedAnnualReturn: "0.07", currentAge: 30, targetAge: 55, inflationRate: "0.02", useInflationAdjustedGoal: true });
   });
 
   app.post(api.investment.update.path, async (req, res) => {
     try {
       const input = api.investment.update.input.parse(req.body);
-      const settings = await storage.updateInvestmentSettings(input);
+      const settings = await store.updateInvestmentSettings(input);
       res.json(settings);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input", errors: err.errors }); return; }
@@ -561,14 +609,14 @@ export async function registerRoutes(
   // === TRANSFERS ===
   app.get(api.transfers.list.path, async (req, res) => {
     const limit = req.query.limit ? Number(req.query.limit) : 10;
-    const transferList = await storage.getTransfers(limit);
+    const transferList = await store.getTransfers(limit);
     res.json(transferList);
   });
 
   app.post(api.transfers.create.path, async (req, res) => {
     try {
       const input = api.transfers.create.input.parse(req.body);
-      const transfer = await storage.createTransfer(input);
+      const transfer = await store.createTransfer(input);
       res.status(201).json(transfer);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input", errors: err.errors }); return; }
@@ -580,14 +628,14 @@ export async function registerRoutes(
   // === CASH SNAPSHOTS ===
   app.get(api.cashSnapshots.get.path, async (req, res) => {
     const weekStartDate = String(req.params.weekStartDate);
-    const snapshot = await storage.getWeeklyCashSnapshot(weekStartDate);
+    const snapshot = await store.getWeeklyCashSnapshot(weekStartDate);
     res.json(snapshot || null);
   });
 
   app.post(api.cashSnapshots.upsert.path, async (req, res) => {
     try {
       const input = api.cashSnapshots.upsert.input.parse(req.body);
-      const snapshot = await storage.upsertWeeklyCashSnapshot(input);
+      const snapshot = await store.upsertWeeklyCashSnapshot(input);
       res.json(snapshot);
     } catch (err) {
       if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid input", errors: err.errors }); return; }
@@ -598,22 +646,22 @@ export async function registerRoutes(
 
   app.delete(api.cashSnapshots.delete.path, async (req, res) => {
     const weekStartDate = String(req.params.weekStartDate);
-    await storage.deleteWeeklyCashSnapshot(weekStartDate);
+    await store.deleteWeeklyCashSnapshot(weekStartDate);
     res.sendStatus(204);
   });
 
   app.get(api.cashSnapshots.computeTotalCash.path, async (req, res) => {
     const includeTrading = req.query.includeTrading === "true";
-    const totalCash = await storage.computeTotalCash(includeTrading);
+    const totalCash = await store.computeTotalCash(includeTrading);
     res.json({ totalCash, includeTrading });
   });
 
   // === NEXA OS SUMMARY ENDPOINT ===
   app.get("/api/os/summary", async (_req, res) => {
     try {
-      const totalCash = await storage.computeTotalCash(false);
-      const totalCashWithTrading = await storage.computeTotalCash(true);
-      const accountsWithBalances = await storage.getAccountsWithBalances();
+      const totalCash = await store.computeTotalCash(false);
+      const totalCashWithTrading = await store.computeTotalCash(true);
+      const accountsWithBalances = await store.getAccountsWithBalances();
       const now = new Date();
       const day = now.getDay();
       const diff = (day === 0 ? -6 : 1) - day;
@@ -624,7 +672,7 @@ export async function registerRoutes(
       const weekEnd = new Date(monday);
       weekEnd.setDate(weekEnd.getDate() + 6);
       const currentWeekEnd = weekEnd.toISOString().split("T")[0];
-      const weeklyIncomeLogs = await storage.getWeeklyIncomeLogs();
+      const weeklyIncomeLogs = await store.getWeeklyIncomeLogs();
       const currentWeekLog = weeklyIncomeLogs.find(l => l.weekStartDate === currentWeekStart);
       const mostRecentLog = weeklyIncomeLogs[0];
       const activeLog = currentWeekLog || mostRecentLog;
@@ -633,14 +681,14 @@ export async function registerRoutes(
         spouseIncome: activeLog ? parseFloat(String(activeLog.spouseIncome)) : 0,
         total: activeLog ? parseFloat(String(activeLog.myIncome)) + parseFloat(String(activeLog.spouseIncome)) : 0,
       };
-      const debtsWithPayments = await storage.getDebtsWithPayments();
+      const debtsWithPayments = await store.getDebtsWithPayments();
       const totalDebt = debtsWithPayments.reduce((sum, d) => sum + d.remainingBalance, 0);
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      const recentTransactions = await storage.getTransactions({ startDate: thirtyDaysAgo.toISOString().split("T")[0], endDate: now.toISOString().split("T")[0], type: "expense" });
+      const recentTransactions = await store.getTransactions({ startDate: thirtyDaysAgo.toISOString().split("T")[0], endDate: now.toISOString().split("T")[0], type: "expense" });
       const monthlySpend = recentTransactions.reduce((sum, t) => sum + parseFloat(t.amount), 0);
-      const investmentSettings = await storage.getInvestmentSettings();
-      const budgetSettingsData = await storage.getBudgetSettings();
+      const investmentSettings = await store.getInvestmentSettings();
+      const budgetSettingsData = await store.getBudgetSettings();
       res.json({
         generatedAt: new Date().toISOString(),
         cash: { total: totalCash, totalWithTrading: totalCashWithTrading },
@@ -813,7 +861,7 @@ export async function registerRoutes(
   // === NEXA OS CAMPAIGN SYNC ===
   app.get("/api/os/campaign", async (_req, res) => {
     try {
-      const data = await storage.getCampaign();
+      const data = await store.getCampaign();
       res.json(data || null);
     } catch (err) {
       console.error("Get campaign error:", err);
@@ -823,7 +871,7 @@ export async function registerRoutes(
 
   app.post("/api/os/campaign", async (req, res) => {
     try {
-      await storage.saveCampaign(req.body);
+      await store.saveCampaign(req.body);
       res.json({ success: true });
     } catch (err) {
       console.error("Save campaign error:", err);
@@ -831,10 +879,49 @@ export async function registerRoutes(
     }
   });
 
-  // === BILL SCHEDULE ===
+  // === FINANCE TRUST VIEW ===
+  // One normalized read path over the legacy schedule preserves data while the canonical model is migrated.
+  app.get("/api/finance/obligations", async (_req, res) => {
+    try {
+      const schedule = await store.getBillSchedule();
+      res.json(schedule.map(normalizeCompatibilityObligation));
+    } catch (err) {
+      console.error("Finance obligations error:", err);
+      res.status(500).json({ message: "Failed to load canonical obligations" });
+    }
+  });
+
+  app.get("/api/finance/trust-summary", async (_req, res) => {
+    try {
+      const [schedule, transactions, debts, settings, cashAvailable] = await Promise.all([
+        store.getBillSchedule(),
+        store.getTransactions(),
+        store.getDebtsWithPayments(),
+        store.getBudgetSettings(),
+        store.computeTotalCash(false),
+      ]);
+      res.json(buildTrustSummary({
+        obligations: schedule.map(normalizeCompatibilityObligation),
+        transactions,
+        debts,
+        cashAvailable,
+        bufferFloor: Number(settings?.bufferGoalAmount || 0),
+        personalFlexPercent: Number(settings?.personalFlexPercent ?? 10),
+        personalFlexMeSplitPercent: Number(settings?.personalFlexMeSplitPct ?? 50),
+        groceryOverride: settings?.groceryBudgetOverride == null ? null : Number(settings.groceryBudgetOverride),
+        fuelOverride: settings?.fuelBudgetOverride == null ? null : Number(settings.fuelBudgetOverride),
+        lookbackWeeks: Number(settings?.avgWindowWeeks || 8),
+      }));
+    } catch (err) {
+      console.error("Finance trust summary error:", err);
+      res.status(500).json({ message: "Failed to generate finance trust summary" });
+    }
+  });
+
+  // === BILL SCHEDULE COMPATIBILITY WRITE PATH ===
   app.get("/api/bill-schedule", async (_req, res) => {
     try {
-      const bills = await storage.getBillSchedule();
+      const bills = await store.getBillSchedule();
       res.json(bills);
     } catch (err) {
       console.error("Get bill schedule error:", err);
@@ -844,18 +931,25 @@ export async function registerRoutes(
 
   app.post("/api/bill-schedule", async (req, res) => {
     try {
-      const { name, amount, dueDay, category, isVariable, autopay, notes } = req.body;
-      if (!name || !amount || !dueDay) {
-        res.status(400).json({ message: "name, amount, and dueDay are required" });
-        return;
-      }
-      const item = await storage.createBillScheduleItem({
-        name, amount: String(amount), dueDay: Number(dueDay),
-        category: category || "Other", isVariable: !!isVariable,
-        autopay: !!autopay, notes: notes || null,
+      const input = financeObligationInputSchema.parse({
+        ...req.body,
+        amount: req.body.amount,
+        dueDay: req.body.dueDay,
+        frequency: req.body.frequency || "monthly",
+        currency: req.body.currency || "USD",
+        endOfMonth: req.body.endOfMonth ?? true,
+      });
+      const item = await store.createBillScheduleItem({
+        name: input.name, amount: String(input.amount), dueDay: input.dueDay,
+        currency: input.currency, frequency: input.frequency, endOfMonth: input.endOfMonth,
+        active: input.active, startDate: input.startDate || null, endDate: input.endDate || null,
+        importance: input.importance, sourceAccount: input.sourceAccount || null, merchantPattern: input.merchantPattern || null,
+        category: input.category, isVariable: input.isVariable,
+        autopay: input.autopay, notes: input.notes || null,
       });
       res.status(201).json(item);
     } catch (err) {
+      if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid recurring obligation", errors: err.errors }); return; }
       console.error("Create bill schedule error:", err);
       res.status(500).json({ message: "Internal server error" });
     }
@@ -863,19 +957,29 @@ export async function registerRoutes(
 
   app.patch("/api/bill-schedule/:id", async (req, res) => {
     try {
+      const input = financeObligationInputSchema.partial().parse(req.body);
       const id = Number(req.params.id);
-      const { name, amount, dueDay, category, isVariable, autopay, notes } = req.body;
-      const item = await storage.updateBillScheduleItem(id, {
-        ...(name !== undefined && { name }),
-        ...(amount !== undefined && { amount: String(amount) }),
-        ...(dueDay !== undefined && { dueDay: Number(dueDay) }),
-        ...(category !== undefined && { category }),
-        ...(isVariable !== undefined && { isVariable: !!isVariable }),
-        ...(autopay !== undefined && { autopay: !!autopay }),
-        ...(notes !== undefined && { notes }),
+      const item = await store.updateBillScheduleItem(id, {
+        ...(input.name !== undefined && { name: input.name }),
+        ...(input.amount !== undefined && { amount: String(input.amount) }),
+        ...(input.dueDay !== undefined && { dueDay: input.dueDay }),
+        ...(input.currency !== undefined && { currency: input.currency }),
+        ...(input.frequency !== undefined && { frequency: input.frequency }),
+        ...(input.endOfMonth !== undefined && { endOfMonth: input.endOfMonth }),
+        ...(input.active !== undefined && { active: input.active }),
+        ...(input.startDate !== undefined && { startDate: input.startDate || null }),
+        ...(input.endDate !== undefined && { endDate: input.endDate || null }),
+        ...(input.importance !== undefined && { importance: input.importance }),
+        ...(input.sourceAccount !== undefined && { sourceAccount: input.sourceAccount || null }),
+        ...(input.merchantPattern !== undefined && { merchantPattern: input.merchantPattern || null }),
+        ...(input.category !== undefined && { category: input.category }),
+        ...(input.isVariable !== undefined && { isVariable: input.isVariable }),
+        ...(input.autopay !== undefined && { autopay: input.autopay }),
+        ...(input.notes !== undefined && { notes: input.notes || null }),
       });
       res.json(item);
     } catch (err) {
+      if (err instanceof z.ZodError) { res.status(400).json({ message: "Invalid recurring obligation", errors: err.errors }); return; }
       console.error("Update bill schedule error:", err);
       res.status(500).json({ message: "Internal server error" });
     }
@@ -883,7 +987,7 @@ export async function registerRoutes(
 
   app.delete("/api/bill-schedule/:id", async (req, res) => {
     try {
-      await storage.deleteBillScheduleItem(Number(req.params.id));
+      await store.deleteBillScheduleItem(Number(req.params.id));
       res.sendStatus(204);
     } catch (err) {
       console.error("Delete bill schedule error:", err);
@@ -899,7 +1003,7 @@ export async function registerRoutes(
 
   app.get("/api/bills-registry", async (_req, res) => {
     try {
-      const bills = await storage.getBillsRegistry();
+      const bills = await store.getBillsRegistry();
       res.json(bills || []);
     } catch (err) {
       console.error("Get bills registry error:", err);
@@ -909,7 +1013,7 @@ export async function registerRoutes(
 
   app.get("/api/weekly-snapshots", async (_req, res) => {
     try {
-      const snapshots = await storage.getWeeklySnapshots();
+      const snapshots = await store.getWeeklySnapshots();
       res.json(snapshots || []);
     } catch (err) {
       console.error("Get weekly snapshots error:", err);
@@ -1139,7 +1243,7 @@ export async function registerRoutes(
       const accessToken = exchangeResponse.data.access_token;
       const itemId = exchangeResponse.data.item_id;
       const accountsResponse = await plaidClient.accountsGet({ access_token: accessToken });
-      const accounts = accountsResponse.data.accounts.map(a => ({
+      const accounts = mergePlaidAccountMetadata(accountsResponse.data.accounts.map(a => ({
         accountId: a.account_id,
         name: a.name,
         mask: a.mask,
@@ -1147,8 +1251,15 @@ export async function registerRoutes(
         subtype: a.subtype,
         balance: a.balances.current,
         availableBalance: a.balances.available,
-      }));
+        isoCurrencyCode: a.balances.iso_currency_code,
+      })), []);
       plaidTokenStore.set(itemId, { accessToken, institutionName: institution_name || "Connected Bank", accounts });
+      await store.upsertPlaidConnection({
+        itemId,
+        institutionName: institution_name || "Connected Bank",
+        accessToken,
+        accounts,
+      });
       console.log(`Plaid connected: ${institution_name} (${accounts.length} accounts)`);
       res.json({ success: true, itemId, institutionName: institution_name || "Connected Bank", accounts });
     } catch (err: any) {
@@ -1163,12 +1274,18 @@ export async function registerRoutes(
       for (const [itemId, stored] of plaidTokenStore.entries()) {
         try {
           const response = await plaidClient.accountsGet({ access_token: stored.accessToken });
-          const accounts = response.data.accounts.map(a => ({
+          const accounts = mergePlaidAccountMetadata(response.data.accounts.map(a => ({
             accountId: a.account_id, name: a.name, mask: a.mask, type: a.type,
             subtype: a.subtype, balance: a.balances.current,
             availableBalance: a.balances.available, isoCurrencyCode: a.balances.iso_currency_code,
-          }));
+          })), stored.accounts);
           plaidTokenStore.set(itemId, { ...stored, accounts });
+          await store.upsertPlaidConnection({
+            itemId,
+            institutionName: stored.institutionName,
+            accessToken: stored.accessToken,
+            accounts,
+          });
           institutions.push({ itemId, institutionName: stored.institutionName, accounts });
         } catch (err) { console.warn(`Failed to fetch accounts for item ${itemId}:`, err); }
       }
@@ -1190,12 +1307,17 @@ export async function registerRoutes(
       const allTransactions: any[] = [];
       for (const [itemId, stored] of plaidTokenStore.entries()) {
         try {
+          const accountsById = new Map((stored.accounts || []).map((account: any) => [account.accountId, account]));
           const response = await plaidClient.transactionsGet({ access_token: stored.accessToken, start_date: startDate, end_date: endDate });
           allTransactions.push(...response.data.transactions.map(t => ({
             transactionId: t.transaction_id, accountId: t.account_id, date: t.date,
             name: t.name, amount: t.amount, category: t.category?.[0] || "Uncategorized",
             subcategory: t.category?.[1] || null, merchantName: t.merchant_name,
             institutionName: stored.institutionName, pending: t.pending,
+            accountName: accountsById.get(t.account_id)?.name || null,
+            accountDisplayName: accountsById.get(t.account_id)?.displayName || accountsById.get(t.account_id)?.customName || accountsById.get(t.account_id)?.name || null,
+            accountOwnerTag: accountsById.get(t.account_id)?.ownerTag || null,
+            accountClassification: accountsById.get(t.account_id)?.classification || getPlaidClassification(accountsById.get(t.account_id) || {}),
           })));
         } catch (err) { console.warn(`Failed to fetch transactions for item ${itemId}:`, err); }
       }
@@ -1222,11 +1344,18 @@ export async function registerRoutes(
             .map(t => ({ date: t.date, amount: Math.abs(t.amount), name: t.name,
               accountName: balanceResponse.data.accounts.find(a => a.account_id === t.account_id)?.name }));
           totalDeposits += deposits.reduce((sum, d) => sum + d.amount, 0);
-          const accounts = balanceResponse.data.accounts.map(a => ({
+          const accounts = mergePlaidAccountMetadata(balanceResponse.data.accounts.map(a => ({
             accountId: a.account_id, name: a.name, balance: a.balances.current,
             availableBalance: a.balances.available, type: a.type,
-          }));
+            subtype: a.subtype, mask: a.mask, isoCurrencyCode: a.balances.iso_currency_code,
+          })), stored.accounts);
           plaidTokenStore.set(itemId, { ...stored, accounts });
+          await store.upsertPlaidConnection({
+            itemId,
+            institutionName: stored.institutionName,
+            accessToken: stored.accessToken,
+            accounts,
+          });
           results.push({ institutionName: stored.institutionName, accounts, recentDeposits: deposits });
         } catch (err) { console.warn(`Sync failed for item ${itemId}:`, err); }
       }
@@ -1241,7 +1370,7 @@ export async function registerRoutes(
     try {
       const institutions = Array.from(plaidTokenStore.entries()).map(([itemId, stored]) => ({
         itemId, institutionName: stored.institutionName, accountCount: stored.accounts.length,
-        accounts: stored.accounts.map(a => ({ name: a.name, mask: a.mask, type: a.type })),
+        accounts: stored.accounts.map(a => ({ name: a.name, displayName: a.displayName || a.customName || a.name, mask: a.mask, type: a.type, ownerTag: a.ownerTag || null })),
       }));
       res.json({ connected: plaidTokenStore.size > 0, institutionCount: plaidTokenStore.size,
         institutions, plaidEnv: process.env.PLAID_ENV || "sandbox" });
@@ -1255,11 +1384,44 @@ export async function registerRoutes(
         const stored = plaidTokenStore.get(itemId)!;
         await plaidClient.itemRemove({ access_token: stored.accessToken });
         plaidTokenStore.delete(itemId);
+        await store.deletePlaidConnection(itemId);
         res.json({ success: true, message: `Disconnected ${stored.institutionName}` });
       } else { res.status(404).json({ message: "Bank not found" }); }
     } catch (err: any) {
       console.error("Plaid disconnect error:", err?.response?.data || err);
       res.status(500).json({ message: "Failed to disconnect bank" });
+    }
+  });
+
+  app.patch("/api/plaid/accounts/:itemId/:accountId/metadata", async (req, res) => {
+    try {
+      const { itemId, accountId } = req.params;
+      const customName = typeof req.body?.customName === "string" ? req.body.customName : null;
+      const ownerTag = typeof req.body?.ownerTag === "string" ? req.body.ownerTag : null;
+      const ledgerAccountIdRaw = req.body?.ledgerAccountId;
+      const ledgerAccountId =
+        ledgerAccountIdRaw == null || ledgerAccountIdRaw === "" || ledgerAccountIdRaw === "none"
+          ? null
+          : Number(ledgerAccountIdRaw);
+      if (ledgerAccountIdRaw != null && ledgerAccountIdRaw !== "" && ledgerAccountIdRaw !== "none" && Number.isNaN(ledgerAccountId)) {
+        res.status(400).json({ message: "Invalid ledgerAccountId" });
+        return;
+      }
+      const updatedConnection = await store.updatePlaidAccountMetadata(itemId, accountId, { customName, ownerTag, ledgerAccountId });
+
+      const existing = plaidTokenStore.get(itemId);
+      if (existing) {
+        plaidTokenStore.set(itemId, {
+          ...existing,
+          accounts: updatedConnection.accounts,
+        });
+      }
+
+      const account = updatedConnection.accounts.find((entry: any) => entry.accountId === accountId) || null;
+      res.json({ success: true, account });
+    } catch (err: any) {
+      console.error("Plaid metadata update error:", err);
+      res.status(500).json({ message: err?.message || "Failed to update Plaid account metadata" });
     }
   });
 

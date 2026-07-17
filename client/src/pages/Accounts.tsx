@@ -31,10 +31,12 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useDebts, useCreateDebt, useDeleteDebt, useUpdateDebt } from "@/hooks/use-debts";
 import { useAccountsWithBalances, useUpdateAccount, useSeedAccounts } from "@/hooks/use-accounts";
+import { usePlaidBalanceSummary } from "@/hooks/use-plaid";
 import { useCreateTransaction } from "@/hooks/use-transactions";
+import { getPlaidAccountTypeLabel, getPlaidDisplayName, getPlaidOwnerLabel, isPlaidDebtAccount } from "@/lib/plaid-account-utils";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertDebtSchema, type InsertDebt, type AccountBalance } from "@shared/schema";
+import { insertDebtSchema, type InsertDebt } from "@shared/schema";
 import { z } from "zod";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { format, addMonths, formatDistanceToNow } from "date-fns";
@@ -52,7 +54,7 @@ import {
   RefreshCw,
   ArrowRightLeft,
   DollarSign,
-  MinusCircle,
+  Landmark,
   Target,
   Pencil,
   Building2,
@@ -76,6 +78,7 @@ function BalancesTab() {
   const [bufferGoalInput, setBufferGoalInput] = useState("1000");
 
   const { data: accounts, isLoading } = useAccountsWithBalances();
+  const { data: plaidSummary } = usePlaidBalanceSummary();
   
   const { data: settings } = useQuery<any>({
     queryKey: ["/api/budget-settings"],
@@ -209,11 +212,47 @@ function BalancesTab() {
   const businessAccounts = bankAccounts.filter(a => a.type === "business");
   const householdBalance = householdAccounts.reduce((sum, a) => sum + a.currentBalance, 0);
   const businessBalance = businessAccounts.reduce((sum, a) => sum + a.currentBalance, 0);
+  const connectedCash = plaidSummary?.totalChecking ?? plaidSummary?.totalCash ?? 0;
 
   const allAccounts = [...householdAccounts, ...bucketAccounts];
 
   return (
     <div className="space-y-4">
+      <div className="rounded-xl border border-border bg-card/70 p-4 shadow-lg">
+        <p className="text-xs font-bold uppercase tracking-[0.25em] text-gold">Accounts hub</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Connected bank cash is the live truth layer. Household, business, and bucket balances below are your ledger layer for transfers, planning, and reconciliation.
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card className="border-border bg-card shadow-lg">
+          <CardContent className="p-4">
+            <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Connected cash</p>
+            <p className="mt-2 text-2xl font-bold font-mono text-success">${connectedCash.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Live linked-bank checking cash</p>
+          </CardContent>
+        </Card>
+        <Card className="border-border bg-card shadow-lg">
+          <CardContent className="p-4">
+            <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Household ledger</p>
+            <p className="mt-2 text-2xl font-bold font-mono text-foreground">${householdBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-border bg-card shadow-lg">
+          <CardContent className="p-4">
+            <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Business ledger</p>
+            <p className="mt-2 text-2xl font-bold font-mono text-gold">${businessBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-border bg-card shadow-lg">
+          <CardContent className="p-4">
+            <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Buckets and reserves</p>
+            <p className="mt-2 text-2xl font-bold font-mono text-foreground">${totalBucketBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Transfer Money Card */}
       <Card className="border-border bg-card shadow-lg">
         <CardHeader className="pb-3 border-b border-border bg-secondary/20">
@@ -222,7 +261,7 @@ function BalancesTab() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-4 space-y-4">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid gap-3 md:grid-cols-2">
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">From Account</label>
               <Select value={transferFrom} onValueChange={setTransferFrom}>
@@ -338,8 +377,15 @@ function BalancesTab() {
         </CardContent>
       </Card>
 
+      <details className="group rounded-2xl border border-border bg-card/70 shadow-lg" open>
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-bold uppercase tracking-[0.25em] text-muted-foreground">
+          <span>Ledger balances and manual controls</span>
+          <span className="text-gold group-open:hidden">Show</span>
+          <span className="hidden text-gold group-open:inline">Hide</span>
+        </summary>
+        <div className="space-y-4 px-4 pb-4">
       {/* Dual-Ledger View: Household & Business (Phase 2E) */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-4 xl:grid-cols-2">
         {/* Household Column */}
         <Card className="border-border bg-card shadow-lg">
           <CardHeader className="pb-3 border-b border-border bg-secondary/20">
@@ -635,12 +681,15 @@ function BalancesTab() {
           </div>
         </CardContent>
       </Card>
+        </div>
+      </details>
     </div>
   );
 }
 
 function DebtsTab() {
   const { data: debts, isLoading } = useDebts();
+  const { data: plaidSummary } = usePlaidBalanceSummary();
   const createDebt = useCreateDebt();
   const deleteDebt = useDeleteDebt();
   const updateDebt = useUpdateDebt();
@@ -654,6 +703,12 @@ function DebtsTab() {
   const { data: accounts } = useAccountsWithBalances();
   const createTransaction = useCreateTransaction();
   const checkingAccounts = accounts?.filter(a => ["personal", "spouse", "joint"].includes(a.type)) || [];
+  const linkedDebtAccounts = (plaidSummary?.accounts || []).filter((account) => isPlaidDebtAccount(account));
+  const linkedCreditAccounts = linkedDebtAccounts.filter((account) => account.debtKind === "credit_card");
+  const linkedLoanAccounts = linkedDebtAccounts.filter((account) => account.debtKind !== "credit_card");
+  const totalLinkedDebt = linkedDebtAccounts.reduce((sum, account) => sum + (account.balance || 0), 0);
+  const totalManualDebt = (debts ?? []).reduce((sum, debt) => sum + parseFloat(debt.balance), 0);
+  const totalManualPayment = (debts ?? []).reduce((sum, debt) => sum + parseFloat(debt.monthlyPayment), 0);
 
   const updateForm = useForm<z.infer<typeof updateBalanceSchema>>({
     resolver: zodResolver(updateBalanceSchema),
@@ -871,10 +926,82 @@ function DebtsTab() {
         </DialogContent>
       </Dialog>
 
-      {debts?.length === 0 ? (
+      <div className="rounded-xl border border-border bg-card/70 p-4 shadow-lg">
+        <p className="text-xs font-bold uppercase tracking-[0.25em] text-gold">Debt center</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Linked credit cards and loans are shown as live liabilities here. Manual debts stay available for payoff tracking when something is not coming in from the bank connection.
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card className="bg-gradient-to-r from-destructive/20 to-destructive/10 border-destructive/30">
+          <CardContent className="p-4">
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em] mb-1">Linked debt</p>
+            <p className="text-3xl font-bold font-mono text-destructive">${totalLinkedDebt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-border bg-card shadow-lg">
+          <CardContent className="p-4">
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em] mb-1">Credit cards</p>
+            <p className="text-2xl font-bold font-mono text-foreground">{linkedCreditAccounts.length}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-border bg-card shadow-lg">
+          <CardContent className="p-4">
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em] mb-1">Loans</p>
+            <p className="text-2xl font-bold font-mono text-foreground">{linkedLoanAccounts.length}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-border bg-card shadow-lg">
+          <CardContent className="p-4">
+            <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em] mb-1">Manual debt tracker</p>
+            <p className="text-2xl font-bold font-mono text-gold">${totalManualDebt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            <p className="mt-1 text-xs text-muted-foreground">${totalManualPayment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo scheduled</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {linkedDebtAccounts.length > 0 && (
+        <Card className="border-border bg-card shadow-lg overflow-hidden">
+          <CardHeader className="pb-3 border-b border-border bg-secondary/20">
+            <CardTitle className="text-lg flex items-center gap-2 text-gold">
+              <CreditCard className="w-5 h-5" /> Linked liabilities
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 space-y-3">
+            {linkedDebtAccounts.map((account) => (
+              <div key={account.accountId} className="rounded-xl border border-soft-red/30 bg-soft-red/10 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground truncate">{getPlaidDisplayName(account)}</p>
+                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                      {account.institutionName}
+                      {account.mask ? ` •••• ${account.mask}` : ""}
+                      {" • "}
+                      {getPlaidAccountTypeLabel(account)}
+                    </p>
+                    {getPlaidOwnerLabel(account.ownerTag) && (
+                      <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-gold">{getPlaidOwnerLabel(account.ownerTag)}</p>
+                    )}
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-lg font-bold font-mono text-soft-red">
+                      ${(account.balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Live balance</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {(debts?.length || 0) === 0 ? (
         <div className="text-center py-12 bg-card rounded-2xl border border-dashed border-border">
           <TrendingDown className="w-12 h-12 mx-auto text-muted-foreground/20 mb-2" />
-          <p className="text-muted-foreground font-medium">No debts tracked yet.</p>
+          <p className="text-muted-foreground font-medium">No manual debts tracked yet.</p>
+          <p className="mt-2 text-xs text-muted-foreground">That is okay if the linked-bank liabilities above are your main debt source.</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -885,13 +1012,13 @@ function DebtsTab() {
                 <div>
                   <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em] mb-1">Total Debt</p>
                   <p data-testid="text-total-debt" className="text-3xl font-bold font-mono text-destructive">
-                    ${(debts ?? []).reduce((sum, d) => sum + parseFloat(d.balance), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ${totalManualDebt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </p>
                 </div>
                 <div className="text-right">
                   <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em] mb-1">{(debts ?? []).length} {(debts ?? []).length === 1 ? 'Debt' : 'Debts'}</p>
                   <p className="text-lg font-bold font-mono text-muted-foreground">
-                    ${(debts ?? []).reduce((sum, d) => sum + parseFloat(d.monthlyPayment), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo
+                    ${totalManualPayment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo
                   </p>
                 </div>
               </div>
@@ -1005,43 +1132,39 @@ function DebtsTab() {
 }
 
 export default function Accounts() {
-  const [activeTab, setActiveTab] = useState("balances");
+  const [activeTab, setActiveTab] = useState("debts");
 
   return (
     <Layout title="Accounts">
       <div className="space-y-4">
+        <div className="rounded-xl border border-border bg-card/70 p-4 shadow-lg">
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-gold">Reconciliation center</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Use Debts to manage payoff progress and Bank to manage the Plaid connection directly. Live balance comparison now lives in Banking so this page stays focused.
+          </p>
+        </div>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-2 h-12 p-1 bg-secondary border border-border rounded-xl">
-            <TabsTrigger 
-              value="balances" 
-              className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-bold flex items-center gap-2"
-            >
-              <Wallet className="w-4 h-4" /> Balances
-            </TabsTrigger>
             <TabsTrigger 
               value="debts" 
               className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-bold flex items-center gap-2"
             >
               <CreditCard className="w-4 h-4" /> Debts
             </TabsTrigger>
-          
-          <TabsTrigger
+            <TabsTrigger
               value="bank"
               className="rounded-lg data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-bold flex items-center gap-2"
             >
-              <Building2 className="w-4 h-4" /> Bank
-            </TabsTrigger></TabsList>
-
-          <TabsContent value="balances" className="mt-4">
-            <BalancesTab />
-          </TabsContent>
+              <Landmark className="w-4 h-4" /> Bank
+            </TabsTrigger>
+          </TabsList>
 
           <TabsContent value="debts" className="mt-4">
             <DebtsTab />
           </TabsContent>
-        <TabsContent value="bank" className="mt-4">
-          <PlaidBankConnect />
-        </TabsContent>
+          <TabsContent value="bank" className="mt-4">
+            <PlaidBankConnect />
+          </TabsContent>
         </Tabs>
       </div>
     </Layout>

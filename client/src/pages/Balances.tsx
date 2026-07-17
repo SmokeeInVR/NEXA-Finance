@@ -1,72 +1,177 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { formatDistanceToNow } from "date-fns";
 import { Layout } from "@/components/Layout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { LiveBankSnapshotCard } from "@/components/LiveBankSnapshotCard";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Wallet, Plus, Save, Clock } from "lucide-react";
-import type { AccountBalance } from "@shared/schema";
-import { formatDistanceToNow } from "date-fns";
+import { useAccountsWithBalances, useUpdateAccount } from "@/hooks/use-accounts";
+import { Loader2, Plus, Save, Clock, Wallet, Briefcase, PiggyBank, Landmark } from "lucide-react";
+import type { AccountWithBalance } from "@shared/schema";
+
+const EDITABLE_ACCOUNT_TYPES = ["personal", "spouse", "joint", "bucket", "business"] as const;
+
+function formatMoney(amount: number) {
+  return amount.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function AccountSection({
+  title,
+  description,
+  icon,
+  toneClass,
+  accounts,
+  editedBalances,
+  setEditedBalances,
+  updateAccount,
+  toast,
+}: {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  toneClass: string;
+  accounts: AccountWithBalance[];
+  editedBalances: Record<number, string>;
+  setEditedBalances: React.Dispatch<React.SetStateAction<Record<number, string>>>;
+  updateAccount: ReturnType<typeof useUpdateAccount>;
+  toast: ReturnType<typeof useToast>["toast"];
+}) {
+  const persistBalance = async (account: AccountWithBalance, desiredBalance: string) => {
+    const parsed = parseFloat(desiredBalance);
+    if (Number.isNaN(parsed)) {
+      throw new Error(`Invalid balance for ${account.name}`);
+    }
+
+    const startingBalance = parseFloat(account.startingBalance || "0");
+    const transactionDelta = account.currentBalance - startingBalance;
+    const newStartingBalance = parsed - transactionDelta;
+
+    await updateAccount.mutateAsync({
+      id: account.id,
+      startingBalance: newStartingBalance.toFixed(2),
+    });
+  };
+
+  return (
+    <Card className="border-border bg-card shadow-lg">
+      <CardHeader className="pb-3 border-b border-border bg-secondary/20">
+        <CardTitle className="text-lg flex items-center gap-2 text-gold">
+          {icon} {title}
+        </CardTitle>
+        <CardDescription className="text-muted-foreground text-xs uppercase tracking-widest font-bold">
+          {description}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="p-4 space-y-3">
+        {accounts.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No accounts in this group yet.</p>
+        ) : (
+          accounts.map((account) => {
+            const editedValue = editedBalances[account.id] ?? account.currentBalance.toFixed(2);
+            return (
+              <div key={account.id} className="rounded-xl border border-border/60 bg-muted/15 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground truncate">{account.name}</p>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{account.type}</p>
+                    {account.updatedAt && (
+                      <p className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+                        <Clock className="w-3 h-3" />
+                        Updated {formatDistanceToNow(new Date(account.updatedAt), { addSuffix: true })}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-gold text-sm">$</span>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      className="h-10 w-32 border-border bg-background text-right font-mono font-bold"
+                      value={editedValue}
+                      onChange={(event) =>
+                        setEditedBalances((previous) => ({
+                          ...previous,
+                          [account.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <Button
+                      size="sm"
+                      className="h-10"
+                      disabled={updateAccount.isPending}
+                      onClick={async () => {
+                        try {
+                          await persistBalance(account, editedValue);
+                          setEditedBalances((previous) => {
+                            const next = { ...previous };
+                            delete next[account.id];
+                            return next;
+                          });
+                          toast({ title: `${account.name} updated` });
+                        } catch (error: any) {
+                          toast({
+                            title: "Error",
+                            description: error.message || "Failed to update balance",
+                            variant: "destructive",
+                          });
+                        }
+                      }}
+                    >
+                      <Save className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function Balances() {
   const { toast } = useToast();
-  const [editedBalances, setEditedBalances] = useState<Record<string, string>>({});
-  const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  const { data: accounts, isLoading } = useAccountsWithBalances();
+  const updateAccount = useUpdateAccount();
+  const [editedBalances, setEditedBalances] = useState<Record<number, string>>({});
+  const [selectedQuickAddId, setSelectedQuickAddId] = useState<number | null>(null);
 
-  const { data: balances, isLoading } = useQuery<AccountBalance[]>({
-    queryKey: ["/api/balances"],
-  });
+  const visibleAccounts = useMemo(
+    () =>
+      (accounts || []).filter(
+        (account) =>
+          EDITABLE_ACCOUNT_TYPES.includes(account.type as (typeof EDITABLE_ACCOUNT_TYPES)[number]) &&
+          !account.excludeFromTotals,
+      ),
+    [accounts],
+  );
 
-  const updateMutation = useMutation({
-    mutationFn: async (updates: { name: string; balance: string }[]) => {
-      return apiRequest("POST", "/api/balances", updates);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/balances"] });
-      setEditedBalances({});
-      toast({
-        title: "Balances Updated",
-        description: "Your account balances have been saved.",
-      });
-    },
-    onError: (err: any) => {
-      toast({
-        title: "Error",
-        description: err.message || "Failed to update balances",
-        variant: "destructive",
-      });
-    },
-  });
+  const householdAccounts = visibleAccounts.filter((account) => ["personal", "spouse", "joint"].includes(account.type));
+  const businessAccounts = visibleAccounts.filter((account) => account.type === "business");
+  const bucketAccounts = visibleAccounts.filter((account) => account.type === "bucket");
+  const selectedQuickAddAccount = visibleAccounts.find((account) => account.id === selectedQuickAddId) ?? null;
 
-  const handleBalanceChange = (name: string, value: string) => {
-    setEditedBalances((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleQuickAdd = (amount: number) => {
-    if (!selectedAccount) return;
-    const currentBalance = editedBalances[selectedAccount] ?? 
-      balances?.find(b => b.name === selectedAccount)?.balance ?? "0";
-    const newBalance = (parseFloat(currentBalance) + amount).toFixed(2);
-    setEditedBalances((prev) => ({ ...prev, [selectedAccount]: newBalance }));
-  };
-
-  const handleSaveAll = () => {
-    const updates = Object.entries(editedBalances).map(([name, balance]) => ({
-      name,
-      balance,
-    }));
-    if (updates.length > 0) {
-      updateMutation.mutate(updates);
-    }
-  };
-
-  const hasChanges = Object.keys(editedBalances).length > 0;
+  const householdTotal = householdAccounts.reduce(
+    (sum, account) => sum + parseFloat(editedBalances[account.id] ?? account.currentBalance.toFixed(2)),
+    0,
+  );
+  const businessTotal = businessAccounts.reduce(
+    (sum, account) => sum + parseFloat(editedBalances[account.id] ?? account.currentBalance.toFixed(2)),
+    0,
+  );
+  const bucketTotal = bucketAccounts.reduce(
+    (sum, account) => sum + parseFloat(editedBalances[account.id] ?? account.currentBalance.toFixed(2)),
+    0,
+  );
 
   if (isLoading) {
     return (
-      <Layout title="Balances">
+      <Layout title="Banking">
         <div className="flex items-center justify-center h-64">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
@@ -74,117 +179,142 @@ export default function Balances() {
     );
   }
 
-  const getDisplayBalance = (account: AccountBalance) => {
-    return editedBalances[account.name] ?? account.balance;
-  };
-
   return (
-    <Layout title="Balances">
-      <div className="space-y-4">
-        <Card className="border-border bg-card shadow-lg">
-          <CardHeader className="pb-3 border-b border-border bg-secondary/20">
-            <CardTitle className="text-lg flex items-center gap-2 text-gold">
-              <Wallet className="w-5 h-5" /> Household Account Balances
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 space-y-3">
-            {balances?.map((account) => (
-              <div
-                key={account.id}
-                data-testid={`balance-row-${account.name.toLowerCase().replace(/\s+/g, "-")}`}
-                className={`p-4 rounded-xl border transition-all ${
-                  selectedAccount === account.name
-                    ? "border-gold bg-gold/5"
-                    : "border-border bg-secondary/20"
-                }`}
-                onClick={() => setSelectedAccount(account.name)}
-              >
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-foreground truncate">{account.name}</p>
-                    {account.updatedAt && (
-                      <p className="text-[10px] text-muted-foreground flex items-center gap-1 mt-1">
-                        <Clock className="w-3 h-3" />
-                        Updated {formatDistanceToNow(new Date(account.updatedAt), { addSuffix: true })}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground text-lg">$</span>
-                    <Input
-                      data-testid={`input-balance-${account.name.toLowerCase().replace(/\s+/g, "-")}`}
-                      type="number"
-                      step="0.01"
-                      className="w-28 h-10 text-right font-mono font-bold text-lg bg-background border-border"
-                      value={getDisplayBalance(account)}
-                      onChange={(e) => handleBalanceChange(account.name, e.target.value)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+    <Layout title="Banking">
+      <div className="space-y-6">
+        <div className="rounded-xl border border-border bg-card/70 p-4 shadow-lg">
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-gold">Banking workspace</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            This page now works like a clean banking truth layer: live connected accounts first, ledger baselines second. Use manual edits only when you are correcting the ledger to match the bank, not inventing balances from scratch.
+          </p>
+        </div>
 
-        {selectedAccount && (
+        <LiveBankSnapshotCard />
+
+        <div className="grid gap-4 md:grid-cols-3">
           <Card className="border-border bg-card shadow-lg">
-            <CardHeader className="pb-2 pt-4 px-4">
-              <CardTitle className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
-                Quick Add to {selectedAccount}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 pt-2">
-              <div className="flex gap-2 flex-wrap">
-                {[100, 500, 1000, 2500].map((amount) => (
-                  <Button
-                    key={amount}
-                    variant="outline"
-                    size="sm"
-                    data-testid={`button-quick-add-${amount}`}
-                    className="flex-1 min-w-[70px] border-border text-foreground hover:bg-gold/10 hover:text-gold hover:border-gold"
-                    onClick={() => handleQuickAdd(amount)}
-                  >
-                    <Plus className="w-3 h-3 mr-1" />${amount}
-                  </Button>
-                ))}
-              </div>
+            <CardContent className="p-4">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Household ledger</p>
+              <p className="mt-2 text-2xl font-bold font-mono text-success">${formatMoney(householdTotal)}</p>
             </CardContent>
           </Card>
-        )}
+          <Card className="border-border bg-card shadow-lg">
+            <CardContent className="p-4">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Business ledger</p>
+              <p className="mt-2 text-2xl font-bold font-mono text-gold">${formatMoney(businessTotal)}</p>
+            </CardContent>
+          </Card>
+          <Card className="border-border bg-card shadow-lg">
+            <CardContent className="p-4">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Buckets and reserves</p>
+              <p className="mt-2 text-2xl font-bold font-mono text-foreground">${formatMoney(bucketTotal)}</p>
+            </CardContent>
+          </Card>
+        </div>
 
-        {hasChanges && (
-          <div className="sticky bottom-20 z-40">
-            <Button
-              data-testid="button-save-balances"
-              className="w-full h-12 bg-gold hover:bg-gold/90 text-black font-bold text-base shadow-lg"
-              onClick={handleSaveAll}
-              disabled={updateMutation.isPending}
-            >
-              {updateMutation.isPending ? (
-                <Loader2 className="w-5 h-5 animate-spin mr-2" />
-              ) : (
-                <Save className="w-5 h-5 mr-2" />
-              )}
-              Save All Changes
-            </Button>
-          </div>
-        )}
-
-        <Card className="border-border bg-card shadow-lg">
-          <CardContent className="p-4">
-            <div className="flex justify-between items-center">
-              <span className="text-sm font-bold text-muted-foreground uppercase tracking-widest">Total Cash</span>
-              <span className="text-xl font-bold font-mono text-gold">
-                ${balances
-                  ?.filter((b) => b.name !== "Trading")
-                  .reduce((acc, b) => acc + parseFloat(b.balance), 0)
-                  .toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
+        <details className="group rounded-2xl border border-border bg-card/70 shadow-lg" open>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-bold uppercase tracking-[0.25em] text-muted-foreground">
+            <span>Ledger baseline controls</span>
+            <span className="text-gold group-open:hidden">Show</span>
+            <span className="hidden text-gold group-open:inline">Hide</span>
+          </summary>
+          <div className="space-y-6 px-4 pb-4">
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.9fr)]">
+              <div className="space-y-6">
+                <AccountSection
+                  title="Household accounts"
+                  description="Joint, personal, and spouse ledger balances"
+                  icon={<Wallet className="w-5 h-5" />}
+                  toneClass="text-success"
+                  accounts={householdAccounts}
+                  editedBalances={editedBalances}
+                  setEditedBalances={setEditedBalances}
+                  updateAccount={updateAccount}
+                  toast={toast}
+                />
+                <AccountSection
+                  title="Business accounts"
+                  description="Operating cash and business-only ledger balances"
+                  icon={<Briefcase className="w-5 h-5" />}
+                  toneClass="text-gold"
+                  accounts={businessAccounts}
+                  editedBalances={editedBalances}
+                  setEditedBalances={setEditedBalances}
+                  updateAccount={updateAccount}
+                  toast={toast}
+                />
+              </div>
+              <div className="space-y-6">
+                <AccountSection
+                  title="Buckets and reserves"
+                  description="House fund, tax set-aside, buffer, and other buckets"
+                  icon={<PiggyBank className="w-5 h-5" />}
+                  toneClass="text-foreground"
+                  accounts={bucketAccounts}
+                  editedBalances={editedBalances}
+                  setEditedBalances={setEditedBalances}
+                  updateAccount={updateAccount}
+                  toast={toast}
+                />
+                {selectedQuickAddAccount && (
+                  <Card className="border-border bg-card shadow-lg">
+                    <CardHeader className="pb-3 border-b border-border bg-secondary/20">
+                      <CardTitle className="text-lg flex items-center gap-2 text-gold">
+                        <Plus className="w-5 h-5" /> Quick add to {selectedQuickAddAccount.name}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-4">
+                      <div className="flex gap-2 flex-wrap">
+                        {[100, 250, 500, 1000].map((amount) => (
+                          <Button
+                            key={amount}
+                            variant="outline"
+                            className="border-border hover:bg-gold/10 hover:text-gold"
+                            onClick={() => {
+                              const current = parseFloat(
+                                editedBalances[selectedQuickAddAccount.id] ?? selectedQuickAddAccount.currentBalance.toFixed(2),
+                              );
+                              setEditedBalances((previous) => ({
+                                ...previous,
+                                [selectedQuickAddAccount.id]: (current + amount).toFixed(2),
+                              }));
+                            }}
+                          >
+                            +${amount}
+                          </Button>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+                <Card className="border-border bg-card shadow-lg">
+                  <CardHeader className="pb-3 border-b border-border bg-secondary/20">
+                    <CardTitle className="text-lg flex items-center gap-2 text-gold">
+                      <Landmark className="w-5 h-5" /> How to use this page
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 space-y-3 text-sm text-muted-foreground">
+                    <p>Use the Accounts page for transfers and reconciliation.</p>
+                    <p>Use this page when a ledger baseline needs to be corrected to match the bank.</p>
+                    <p>Live bank balances should stay the source of truth whenever Plaid is connected.</p>
+                  </CardContent>
+                </Card>
+              </div>
             </div>
-            <p className="text-[10px] text-muted-foreground mt-1">Excludes Trading account</p>
-          </CardContent>
-        </Card>
+            <div className="flex flex-wrap gap-2">
+              {visibleAccounts.map((account) => (
+                <Button
+                  key={account.id}
+                  variant={selectedQuickAddId === account.id ? "default" : "outline"}
+                  className="border-border"
+                  onClick={() => setSelectedQuickAddId(account.id)}
+                >
+                  {account.name}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </details>
       </div>
     </Layout>
   );

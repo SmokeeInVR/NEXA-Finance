@@ -1,11 +1,30 @@
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useBillsRegistry } from "@/hooks/use-bills";
-import { Loader2, AlertTriangle, CheckCircle2, Clock } from "lucide-react";
+import { AlertTriangle, CalendarClock, Loader2, TimerReset } from "lucide-react";
 
-const WEEKLY_TARGET = 599;
+function formatMoney(amount: number) {
+  return amount.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function normalizeDate(value: string | Date) {
+  const parsed = new Date(value);
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+}
+
+function getNextOccurrence(dueDay: number, reference: Date) {
+  const year = reference.getFullYear();
+  const month = reference.getMonth();
+  const thisMonth = new Date(year, month, dueDay);
+  if (thisMonth >= reference) return thisMonth;
+  return new Date(year, month + 1, dueDay);
+}
 
 export function BillsRegistryCard() {
-  const { data: bills, isLoading } = useBillsRegistry();
+  const { data: bills, isLoading, error } = useBillsRegistry();
 
   if (isLoading) {
     return (
@@ -14,10 +33,31 @@ export function BillsRegistryCard() {
           <CardTitle className="text-lg flex items-center gap-2 text-gold">
             <AlertTriangle className="w-5 h-5" /> Bills Registry
           </CardTitle>
-          <CardDescription className="text-muted-foreground text-xs uppercase tracking-widest font-bold">Loading...</CardDescription>
+          <CardDescription className="text-muted-foreground text-xs uppercase tracking-widest font-bold">
+            Loading bill obligations
+          </CardDescription>
         </CardHeader>
         <CardContent className="p-6 flex items-center justify-center h-32">
           <Loader2 className="w-5 h-5 text-gold animate-spin" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error instanceof Error) {
+    return (
+      <Card className="border-border bg-card shadow-2xl overflow-hidden">
+        <CardHeader className="pb-3 border-b border-border bg-secondary/20">
+          <CardTitle className="text-lg flex items-center gap-2 text-gold">
+            <AlertTriangle className="w-5 h-5" /> Bills Registry
+          </CardTitle>
+          <CardDescription className="text-muted-foreground text-xs uppercase tracking-widest font-bold">
+            Planning obligations
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-6 space-y-2">
+          <p className="text-sm text-soft-red font-medium">Unable to load bills registry data.</p>
+          <p className="text-xs text-muted-foreground">{error.message}</p>
         </CardContent>
       </Card>
     );
@@ -30,37 +70,53 @@ export function BillsRegistryCard() {
           <CardTitle className="text-lg flex items-center gap-2 text-gold">
             <AlertTriangle className="w-5 h-5" /> Bills Registry
           </CardTitle>
+          <CardDescription className="text-muted-foreground text-xs uppercase tracking-widest font-bold">
+            Planning obligations
+          </CardDescription>
         </CardHeader>
         <CardContent className="p-6">
-          <p className="text-sm text-muted-foreground">No bills registered</p>
+          <p className="text-sm text-muted-foreground">No bills are registered yet.</p>
         </CardContent>
       </Card>
     );
   }
 
   const today = new Date();
-  const thisMonth = today.getMonth();
-  const thisYear = today.getFullYear();
+  today.setHours(0, 0, 0, 0);
 
-  // Separate recurring and one-time bills
-  const recurring = bills.filter(b => !b.endDate || new Date(b.endDate) > today);
-  const oneTime = bills.filter(b => b.endDate && new Date(b.endDate) <= today);
+  const oneTime = bills
+    .filter((bill) => bill.endDate && bill.startDate === bill.endDate)
+    .sort((a, b) => normalizeDate(a.endDate as string).getTime() - normalizeDate(b.endDate as string).getTime());
 
-  // Sort recurring by due day
-  const recurringByDue = [...recurring].sort((a, b) => a.dueDay - b.dueDay);
+  const recurring = bills.filter((bill) => !(bill.endDate && bill.startDate === bill.endDate));
+  const activeRecurring = recurring
+    .filter((bill) => {
+      const startDate = normalizeDate(bill.startDate);
+      const endDate = bill.endDate ? normalizeDate(bill.endDate) : null;
+      return startDate <= today && (!endDate || endDate >= today);
+    })
+    .sort((a, b) => a.dueDay - b.dueDay);
 
-  // Find bills due soon (within 7 days from today)
-  const dueSoonStart = today.getDate();
-  const dueSoonEnd = today.getDate() + 7;
-  const dueSoon = recurringByDue.filter(b => b.dueDay >= dueSoonStart && b.dueDay <= dueSoonEnd);
+  const futureRecurring = recurring
+    .filter((bill) => normalizeDate(bill.startDate) > today)
+    .sort((a, b) => normalizeDate(a.startDate).getTime() - normalizeDate(b.startDate).getTime());
 
-  // Calculate monthly total from recurring bills
-  const monthlyTotal = recurring.reduce((sum, b) => sum + parseFloat(b.amount), 0);
-  const weeklyTotal = monthlyTotal / 4.33; // Average weeks per month
+  const dueSoon = activeRecurring
+    .map((bill) => {
+      const nextDueDate = getNextOccurrence(bill.dueDay, today);
+      const daysUntil = Math.ceil((nextDueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      return { bill, nextDueDate, daysUntil };
+    })
+    .filter(({ daysUntil }) => daysUntil >= 0 && daysUntil <= 7)
+    .sort((a, b) => a.daysUntil - b.daysUntil);
 
-  // Calculate this week's funding (using a placeholder value - in real app would fetch from bills-funding endpoint)
-  const thisWeekFunded = 670; // Example: from household income
-  const isWeeklyOnTrack = thisWeekFunded >= WEEKLY_TARGET;
+  const activeMonthlyRecurring = activeRecurring.reduce((sum, bill) => sum + parseFloat(bill.amount), 0);
+  const activeWeeklyRecurring = activeMonthlyRecurring / 4.33;
+  const futureMonthlyRecurring = futureRecurring.reduce((sum, bill) => sum + parseFloat(bill.amount), 0);
+  const dueSoonTotal = dueSoon.reduce((sum, item) => sum + parseFloat(item.bill.amount), 0);
+  const oneTimeUpcomingTotal = oneTime
+    .filter((bill) => normalizeDate(bill.endDate as string) >= today)
+    .reduce((sum, bill) => sum + parseFloat(bill.amount), 0);
 
   return (
     <Card className="border-border bg-card shadow-2xl overflow-hidden">
@@ -69,25 +125,44 @@ export function BillsRegistryCard() {
           <AlertTriangle className="w-5 h-5" /> Bills Registry
         </CardTitle>
         <CardDescription className="text-muted-foreground text-xs uppercase tracking-widest font-bold">
-          {recurring.length} recurring + {oneTime.length} one-time
+          Current obligations first, future move costs separated cleanly
         </CardDescription>
       </CardHeader>
       <CardContent className="p-6 space-y-6">
-        {/* Critical Bills (Due Soon) */}
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-border/50 bg-muted/20 p-3">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Active / month</p>
+            <p className="mt-1 text-xl font-bold font-mono text-foreground">${formatMoney(activeMonthlyRecurring)}</p>
+          </div>
+          <div className="rounded-lg border border-border/50 bg-muted/20 p-3">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Active / week</p>
+            <p className="mt-1 text-xl font-bold font-mono text-gold">${formatMoney(activeWeeklyRecurring)}</p>
+          </div>
+          <div className="rounded-lg border border-warning/30 bg-warning/10 p-3">
+            <p className="text-xs font-bold uppercase tracking-wider text-warning">Due next 7 days</p>
+            <p className="mt-1 text-xl font-bold font-mono text-warning">${formatMoney(dueSoonTotal)}</p>
+          </div>
+        </div>
+
         {dueSoon.length > 0 && (
           <div className="space-y-3">
-            <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Critical Bills (Due Soon)</h3>
+            <div className="flex items-center gap-2">
+              <CalendarClock className="w-4 h-4 text-gold" />
+              <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Coming due</h3>
+            </div>
             <div className="space-y-2">
-              {dueSoon.map(bill => (
+              {dueSoon.map(({ bill, nextDueDate, daysUntil }) => (
                 <div key={bill.id} className="flex justify-between items-center p-3 rounded-lg bg-muted/30 border border-border/50">
                   <div className="space-y-1">
                     <p className="text-sm font-medium text-foreground">{bill.name}</p>
-                    <p className="text-xs text-muted-foreground">Due {bill.dueDay}th of month</p>
+                    <p className="text-xs text-muted-foreground">
+                      {bill.category} • due {nextDueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                    </p>
                   </div>
                   <div className="text-right">
-                    <p className="text-lg font-bold font-mono text-foreground">${parseFloat(bill.amount).toFixed(2)}</p>
-                    <p className="text-xs text-success flex items-center justify-end gap-1">
-                      <CheckCircle2 className="w-3 h-3" /> Paid on time
+                    <p className="text-lg font-bold font-mono text-foreground">${formatMoney(parseFloat(bill.amount))}</p>
+                    <p className="text-xs text-warning font-medium">
+                      {daysUntil === 0 ? "Due today" : `${daysUntil} day${daysUntil === 1 ? "" : "s"} away`}
                     </p>
                   </div>
                 </div>
@@ -96,70 +171,77 @@ export function BillsRegistryCard() {
           </div>
         )}
 
-        {/* All Recurring Bills */}
         <div className="space-y-3">
-          <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">All Recurring Bills</h3>
-          <div className="grid grid-cols-2 gap-2">
-            {recurringByDue.map(bill => (
+          <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Active recurring bills</h3>
+          <div className="grid gap-2 md:grid-cols-2">
+            {activeRecurring.map((bill) => (
               <div key={bill.id} className="p-3 rounded-lg bg-muted/20 border border-border/50">
                 <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1">{bill.category}</p>
-                <p className="text-sm font-medium text-foreground truncate">{bill.name}</p>
+                <p className="text-sm font-medium text-foreground">{bill.name}</p>
                 <div className="flex justify-between items-end mt-2">
-                  <p className="text-xs text-muted-foreground">Due {bill.dueDay}th</p>
-                  <p className="text-sm font-bold font-mono text-gold">${parseFloat(bill.amount).toFixed(2)}</p>
+                  <p className="text-xs text-muted-foreground">Due day {bill.dueDay}</p>
+                  <p className="text-sm font-bold font-mono text-gold">${formatMoney(parseFloat(bill.amount))}</p>
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* One-Time Bills */}
-        {oneTime.length > 0 && (
-          <div className="space-y-3 p-4 rounded-lg bg-warning/10 border border-warning/30">
-            <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">One-Time Costs</h3>
+        {futureRecurring.length > 0 && (
+          <div className="space-y-3 rounded-lg border border-gold/30 bg-gold/10 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <TimerReset className="w-4 h-4 text-gold" />
+                <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Future recurring after move</h3>
+              </div>
+              <p className="text-xs font-bold font-mono text-gold">${formatMoney(futureMonthlyRecurring)} / month</p>
+            </div>
             <div className="space-y-2">
-              {oneTime.map(bill => (
-                <div key={bill.id} className="flex justify-between items-center">
+              {futureRecurring.map((bill) => (
+                <div key={bill.id} className="flex justify-between items-center rounded-lg border border-border/40 bg-background/40 p-3">
                   <div className="space-y-1">
                     <p className="text-sm font-medium text-foreground">{bill.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {bill.endDate && new Date(bill.endDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      Starts {normalizeDate(bill.startDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                     </p>
                   </div>
-                  <p className="text-lg font-bold font-mono text-warning">${parseFloat(bill.amount).toFixed(2)}</p>
+                  <p className="text-lg font-bold font-mono text-gold">${formatMoney(parseFloat(bill.amount))}</p>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Weekly Funding Status */}
-        <div className="p-4 rounded-lg bg-secondary/20 border border-border/50 space-y-3">
-          <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">This Week's Funding</h3>
-          <div className="grid grid-cols-3 gap-3 text-sm">
-            <div>
-              <p className="text-xs text-muted-foreground uppercase font-bold mb-1">Target</p>
-              <p className="text-lg font-bold font-mono text-foreground">${WEEKLY_TARGET}</p>
+        {oneTime.length > 0 && (
+          <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/10 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">One-time move costs</h3>
+              <p className="text-xs font-bold font-mono text-warning">${formatMoney(oneTimeUpcomingTotal)} upcoming</p>
             </div>
-            <div>
-              <p className="text-xs text-muted-foreground uppercase font-bold mb-1">Funded</p>
-              <p className={`text-lg font-bold font-mono ${isWeeklyOnTrack ? "text-success" : "text-soft-red"}`}>
-                ${thisWeekFunded}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground uppercase font-bold mb-1">Status</p>
-              <p className={`text-sm font-bold uppercase tracking-wider ${isWeeklyOnTrack ? "text-success" : "text-soft-red"}`}>
-                {isWeeklyOnTrack ? "ON TRACK" : "SHORT"}
-              </p>
+            <div className="space-y-2">
+              {oneTime.map((bill) => (
+                <div key={bill.id} className="flex justify-between items-center">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">{bill.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(bill.endDate as string).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </p>
+                  </div>
+                  <p className="text-lg font-bold font-mono text-warning">${formatMoney(parseFloat(bill.amount))}</p>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Summary */}
-        <div className="text-center pt-3 border-t border-border/50">
-          <p className="text-xs text-muted-foreground font-mono">
-            ${monthlyTotal.toFixed(2)}/month = ${weeklyTotal.toFixed(2)}/week
+        <div className="rounded-lg border border-border/50 bg-muted/10 p-3">
+          <p className="text-xs text-muted-foreground">
+            The active monthly total reflects the current lease. Future apartment rent and move-in costs stay visible,
+            but they do not inflate today&apos;s baseline until their start date arrives.
           </p>
         </div>
       </CardContent>

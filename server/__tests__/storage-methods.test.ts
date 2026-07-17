@@ -5,7 +5,7 @@ describe("Storage Methods", () => {
   describe("getBillsRegistry()", () => {
     it("returns all bills from database", () => {
       const mockBills = [
-        { id: 1, name: "Rent", amount: "1317.00", dueDay: 3 },
+        { id: 1, name: "Apartment Rent (Current Lease)", amount: "1950.00", dueDay: 3 },
         { id: 2, name: "Insurance", amount: "229.96", dueDay: 9 },
       ];
       assert.ok(Array.isArray(mockBills));
@@ -23,14 +23,13 @@ describe("Storage Methods", () => {
       }
     });
 
-    it("recurring bills have no endDate or future endDate", () => {
+    it("active recurring bills can have a future endDate while the replacement bill starts later", () => {
       const mockBills = [
-        { id: 1, name: "Rent", endDate: null },
+        { id: 1, name: "Apartment Rent (Current Lease)", startDate: "2026-06-14", endDate: "2026-08-13" },
         { id: 2, name: "Insurance", endDate: null },
       ];
-      mockBills.forEach(bill => {
-        assert.ok(!bill.endDate || new Date(bill.endDate) > new Date());
-      });
+      assert.equal(mockBills[0].endDate, "2026-08-13");
+      assert.equal(mockBills[0].startDate, "2026-06-14");
     });
 
     it("one-time bills have past endDate", () => {
@@ -44,7 +43,7 @@ describe("Storage Methods", () => {
 
     it("all bills have amount field as string", () => {
       const mockBills = [
-        { id: 1, name: "Rent", amount: "1317.00" },
+        { id: 1, name: "Apartment Rent (Current Lease)", amount: "1950.00" },
       ];
       mockBills.forEach(bill => {
         assert.equal(typeof bill.amount, "string");
@@ -57,7 +56,7 @@ describe("Storage Methods", () => {
   describe("getWeeklySnapshots()", () => {
     it("returns all weekly snapshots from database", () => {
       const mockSnapshots = [
-        { id: 1, weekStartDate: "2026-06-14", householdIncome: "1030", surplus: "131" },
+        { id: 1, weekStartDate: "2026-06-14", householdIncome: "1030.00", surplus: "117.47" },
       ];
       assert.ok(Array.isArray(mockSnapshots));
     });
@@ -73,12 +72,12 @@ describe("Storage Methods", () => {
       }
     });
 
-    it("snapshot baseline math: income 1030 - expense 738 - debt 161 = surplus 131", () => {
+    it("snapshot baseline math: income 1030 - expense 751.53 - debt 161 = surplus 117.47", () => {
       const income = 1030;
-      const expense = 738;
+      const expense = 751.53;
       const debt = 161;
       const surplus = income - expense - debt;
-      assert.equal(surplus, 131);
+      assert.ok(Math.abs(surplus - 117.47) < 0.01);
     });
 
     it("all snapshots have required fields", () => {
@@ -86,10 +85,10 @@ describe("Storage Methods", () => {
       const mockSnapshot = {
         id: 1,
         weekStartDate: "2026-06-14",
-        householdIncome: "1030",
-        householdExpense: "738",
-        debtPayment: "161",
-        surplus: "131",
+        householdIncome: "1030.00",
+        householdExpense: "751.53",
+        debtPayment: "161.00",
+        surplus: "117.47",
         status: "on_track",
       };
       requiredFields.forEach(field => {
@@ -109,18 +108,18 @@ describe("Storage Methods", () => {
 
     it("houseFundAllocation and surplus match baseline", () => {
       const mockSnapshot = {
-        houseFundAllocation: "131",
-        surplus: "131",
+        houseFundAllocation: "117.47",
+        surplus: "117.47",
       };
       assert.equal(mockSnapshot.houseFundAllocation, mockSnapshot.surplus);
     });
 
     it("weekly snapshot amounts are strings (from database)", () => {
       const mockSnapshot = {
-        householdIncome: "1030",
-        householdExpense: "738",
-        debtPayment: "161",
-        surplus: "131",
+        householdIncome: "1030.00",
+        householdExpense: "751.53",
+        debtPayment: "161.00",
+        surplus: "117.47",
       };
       Object.values(mockSnapshot).forEach(value => {
         assert.equal(typeof value, "string");
@@ -128,18 +127,17 @@ describe("Storage Methods", () => {
       });
     });
 
-    it("bills registry total monthly reconciles: $2,019.24 (recurring) + $576.88 (one-time) = $2,596.12", () => {
-      const recurring = 2019.24;
+    it("current housing baseline reconciles: $2,652.24 active recurring + $576.88 one-time = $3,229.12", () => {
+      const recurring = 2652.24;
       const oneTime = 576.88;
       const total = recurring + oneTime;
-      assert.ok(Math.abs(total - 2596.12) < 0.01);
+      assert.ok(Math.abs(total - 3229.12) < 0.01);
     });
 
-    it("weekly bills amount: $2,596.12 / 4.33 weeks = ~$599.58", () => {
-      const monthlyBills = 2596.12;
+    it("weekly bills amount: $2,652.24 / 4.33 weeks = ~$612.53", () => {
+      const monthlyBills = 2652.24;
       const weeklyBills = monthlyBills / 4.33;
-      // Calculated weekly bills is ~$599.58
-      assert.ok(weeklyBills > 599 && weeklyBills < 600);
+      assert.ok(weeklyBills > 612 && weeklyBills < 613);
     });
   });
 
@@ -166,7 +164,7 @@ describe("Storage Methods", () => {
     });
 
     it("all amounts are parseable as floats", () => {
-      const amounts = ["1317.00", "229.96", "124.00", "195.53", "152.75", "576.88"];
+      const amounts = ["1950.00", "1317.00", "229.96", "124.00", "195.53", "152.75", "576.88"];
       amounts.forEach(amount => {
         const parsed = parseFloat(amount);
         assert.ok(!isNaN(parsed));

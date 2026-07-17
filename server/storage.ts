@@ -6,6 +6,7 @@ import {
   accounts, transactions, investmentSettings, transfers,
   weeklyCashSnapshots, billSchedule, campaignData,
   billsRegistry, weeklySnapshots,
+  plaidConnections,
   type InsertBudgetSettings, type BudgetSettings,
   type InsertDebt, type Debt,
   type InsertBusinessExpense, type BusinessExpense,
@@ -22,6 +23,7 @@ import {
   type InsertWeeklyCashSnapshot, type WeeklyCashSnapshot,
   type InsertBillScheduleItem, type BillScheduleItem,
   type BillsRegistryItem, type WeeklySnapshot,
+  type PlaidConnection, type InsertPlaidConnection,
   type CampaignData,
 } from "@shared/schema";
 import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
@@ -118,6 +120,12 @@ export interface IStorage {
   // Bills Registry (Sprint 1: USDA Loan Documentation)
   getBillsRegistry(): Promise<BillsRegistryItem[]>;
 
+  // Plaid Connections (Persistent Bank Link State)
+  getPlaidConnections(): Promise<(PlaidConnection & { accounts: any[] })[]>;
+  upsertPlaidConnection(connection: Omit<InsertPlaidConnection, "accountsJson"> & { accounts: any[] }): Promise<PlaidConnection & { accounts: any[] }>;
+  updatePlaidAccountMetadata(itemId: string, accountId: string, metadata: { customName?: string | null; ownerTag?: string | null; ledgerAccountId?: number | null }): Promise<PlaidConnection & { accounts: any[] }>;
+  deletePlaidConnection(itemId: string): Promise<void>;
+
   // Weekly Snapshots (Sprint 1: 24-Month USDA Trail)
   getWeeklySnapshots(): Promise<WeeklySnapshot[]>;
 
@@ -127,6 +135,24 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private plaidConnectionsReady = false;
+
+  private async ensurePlaidConnectionsTable(): Promise<void> {
+    if (this.plaidConnectionsReady) return;
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS plaid_connections (
+        id serial PRIMARY KEY,
+        item_id text NOT NULL UNIQUE,
+        institution_name text NOT NULL,
+        access_token text NOT NULL,
+        accounts_json text NOT NULL DEFAULT '[]',
+        created_at timestamp DEFAULT now(),
+        updated_at timestamp DEFAULT now()
+      )
+    `);
+    this.plaidConnectionsReady = true;
+  }
+
   // === ACCOUNTS ===
   
   async getAccounts(): Promise<Account[]> {
@@ -268,6 +294,13 @@ export class DatabaseStorage implements IStorage {
   // === BUDGET SETTINGS ===
 
   async getBudgetSettings(): Promise<BudgetSettings | undefined> {
+    await db.execute(sql`ALTER TABLE budget_settings ADD COLUMN IF NOT EXISTS my_allowance numeric NOT NULL DEFAULT 0`);
+    await db.execute(sql`ALTER TABLE budget_settings ADD COLUMN IF NOT EXISTS spouse_allowance numeric NOT NULL DEFAULT 0`);
+    await db.execute(sql`ALTER TABLE budget_settings ADD COLUMN IF NOT EXISTS allowance_configured boolean NOT NULL DEFAULT false`);
+    await db.execute(sql`ALTER TABLE budget_settings ADD COLUMN IF NOT EXISTS personal_flex_percent numeric NOT NULL DEFAULT 10`);
+    await db.execute(sql`ALTER TABLE budget_settings ADD COLUMN IF NOT EXISTS personal_flex_me_split_pct numeric NOT NULL DEFAULT 50`);
+    await db.execute(sql`ALTER TABLE budget_settings ADD COLUMN IF NOT EXISTS grocery_budget_override numeric`);
+    await db.execute(sql`ALTER TABLE budget_settings ADD COLUMN IF NOT EXISTS fuel_budget_override numeric`);
     const [settings] = await db.select().from(budgetSettings).limit(1);
     return settings;
   }
@@ -276,7 +309,13 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getBudgetSettings();
     if (existing) {
       const [updated] = await db.update(budgetSettings).set({ 
-        ...settings, 
+        ...settings,
+        myAllowance: String(settings.myAllowance ?? existing.myAllowance),
+        spouseAllowance: String(settings.spouseAllowance ?? existing.spouseAllowance),
+        personalFlexPercent: String(settings.personalFlexPercent ?? existing.personalFlexPercent),
+        personalFlexMeSplitPct: String(settings.personalFlexMeSplitPct ?? existing.personalFlexMeSplitPct),
+        groceryBudgetOverride: settings.groceryBudgetOverride == null ? null : String(settings.groceryBudgetOverride),
+        fuelBudgetOverride: settings.fuelBudgetOverride == null ? null : String(settings.fuelBudgetOverride),
         splitMode: settings.splitMode || existing.splitMode,
         mySplitPct: settings.mySplitPct || existing.mySplitPct,
         spouseSplitPct: settings.spouseSplitPct || existing.spouseSplitPct,
@@ -294,14 +333,20 @@ export class DatabaseStorage implements IStorage {
         bufferGoalAmount: String(settings.bufferGoalAmount) || existing.bufferGoalAmount,
         bufferRerouteEnabled: settings.bufferRerouteEnabled ?? existing.bufferRerouteEnabled,
         rerouteTarget: settings.rerouteTarget || existing.rerouteTarget,
-        updatedAt: new Date() 
-      }).where(eq(budgetSettings.id, existing.id)).returning();
+        updatedAt: new Date()
+      } as any).where(eq(budgetSettings.id, existing.id)).returning();
       return updated;
     } else {
       const [created] = await db.insert(budgetSettings).values({
         ...settings,
-        bufferGoalAmount: String(settings.bufferGoalAmount)
-      }).returning();
+        bufferGoalAmount: String(settings.bufferGoalAmount),
+        myAllowance: String(settings.myAllowance ?? 0),
+        spouseAllowance: String(settings.spouseAllowance ?? 0),
+        personalFlexPercent: String(settings.personalFlexPercent ?? 10),
+        personalFlexMeSplitPct: String(settings.personalFlexMeSplitPct ?? 50),
+        groceryBudgetOverride: settings.groceryBudgetOverride == null ? null : String(settings.groceryBudgetOverride),
+        fuelBudgetOverride: settings.fuelBudgetOverride == null ? null : String(settings.fuelBudgetOverride)
+      } as any).returning();
       return created;
     }
   }
@@ -553,22 +598,43 @@ export class DatabaseStorage implements IStorage {
   // === BILL SCHEDULE ===
 
   async getBillSchedule(): Promise<BillScheduleItem[]> {
+    await this.ensureBillScheduleColumns();
     return await db.select().from(billSchedule).orderBy(billSchedule.dueDay);
   }
 
+  private async ensureBillScheduleColumns(): Promise<void> {
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'USD'`);
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS frequency text NOT NULL DEFAULT 'monthly'`);
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS end_of_month boolean NOT NULL DEFAULT true`);
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true`);
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS start_date date`);
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS end_date date`);
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS importance text NOT NULL DEFAULT 'important'`);
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS source_account text`);
+    await db.execute(sql`ALTER TABLE bill_schedule ADD COLUMN IF NOT EXISTS merchant_pattern text`);
+  }
+
   async createBillScheduleItem(data: InsertBillScheduleItem): Promise<BillScheduleItem> {
-    const [item] = await db.insert(billSchedule).values({
-      ...data,
-      amount: String(data.amount),
-    }).returning();
+    await this.ensureBillScheduleColumns();
+    const [item] = await db.insert(billSchedule).values({ ...data, amount: String(data.amount) }).returning();
     return item;
   }
 
   async updateBillScheduleItem(id: number, data: Partial<InsertBillScheduleItem>): Promise<BillScheduleItem> {
+    await this.ensureBillScheduleColumns();
     const updateData: Partial<BillScheduleItem> = {
       ...(data.name !== undefined ? { name: data.name } : {}),
       ...(data.amount !== undefined ? { amount: String(data.amount) } : {}),
       ...(data.dueDay !== undefined ? { dueDay: data.dueDay } : {}),
+      ...(data.currency !== undefined ? { currency: data.currency } : {}),
+      ...(data.frequency !== undefined ? { frequency: data.frequency } : {}),
+      ...(data.endOfMonth !== undefined ? { endOfMonth: data.endOfMonth } : {}),
+      ...(data.active !== undefined ? { active: data.active } : {}),
+      ...(data.startDate !== undefined ? { startDate: data.startDate } : {}),
+      ...(data.endDate !== undefined ? { endDate: data.endDate } : {}),
+      ...(data.importance !== undefined ? { importance: data.importance } : {}),
+      ...(data.sourceAccount !== undefined ? { sourceAccount: data.sourceAccount } : {}),
+      ...(data.merchantPattern !== undefined ? { merchantPattern: data.merchantPattern } : {}),
       ...(data.isVariable !== undefined ? { isVariable: data.isVariable } : {}),
       ...(data.autopay !== undefined ? { autopay: data.autopay } : {}),
       ...(data.category !== undefined ? { category: data.category } : {}),
@@ -584,6 +650,107 @@ export class DatabaseStorage implements IStorage {
 
   async deleteBillScheduleItem(id: number): Promise<void> {
     await db.delete(billSchedule).where(eq(billSchedule.id, id));
+  }
+
+  // === PLAID CONNECTIONS (Persistent Bank Link State) ===
+
+  async getPlaidConnections(): Promise<(PlaidConnection & { accounts: any[] })[]> {
+    try {
+      await this.ensurePlaidConnectionsTable();
+      const rows = await db.select().from(plaidConnections).orderBy(desc(plaidConnections.updatedAt));
+      return rows.map((row) => ({
+        ...row,
+        accounts: (() => {
+          try {
+            return JSON.parse(row.accountsJson || "[]");
+          } catch {
+            return [];
+          }
+        })(),
+      }));
+    } catch (err) {
+      console.error("Get plaid connections error:", err);
+      return [];
+    }
+  }
+
+  async upsertPlaidConnection(connection: Omit<InsertPlaidConnection, "accountsJson"> & { accounts: any[] }): Promise<PlaidConnection & { accounts: any[] }> {
+    await this.ensurePlaidConnectionsTable();
+    const payload = {
+      itemId: connection.itemId,
+      institutionName: connection.institutionName,
+      accessToken: connection.accessToken,
+      accountsJson: JSON.stringify(connection.accounts ?? []),
+      updatedAt: new Date(),
+    };
+
+    const existing = await db.select().from(plaidConnections).where(eq(plaidConnections.itemId, connection.itemId));
+    const [row] = existing.length > 0
+      ? await db.update(plaidConnections)
+          .set(payload)
+          .where(eq(plaidConnections.itemId, connection.itemId))
+          .returning()
+      : await db.insert(plaidConnections)
+          .values({ ...payload, createdAt: new Date() })
+          .returning();
+
+    return {
+      ...row,
+      accounts: connection.accounts ?? [],
+    };
+  }
+
+  async updatePlaidAccountMetadata(
+    itemId: string,
+    accountId: string,
+    metadata: { customName?: string | null; ownerTag?: string | null; ledgerAccountId?: number | null },
+  ): Promise<PlaidConnection & { accounts: any[] }> {
+    await this.ensurePlaidConnectionsTable();
+    const [existing] = await db.select().from(plaidConnections).where(eq(plaidConnections.itemId, itemId));
+    if (!existing) {
+      throw new Error("Plaid connection not found");
+    }
+
+    const accounts = (() => {
+      try {
+        return JSON.parse(existing.accountsJson || "[]");
+      } catch {
+        return [];
+      }
+    })();
+
+    const updatedAccounts = accounts.map((account: any) =>
+      account.accountId === accountId
+        ? {
+            ...account,
+            customName: metadata.customName?.trim() || null,
+            ownerTag: metadata.ownerTag?.trim() || null,
+            ledgerAccountId:
+              metadata.ledgerAccountId == null || Number.isNaN(Number(metadata.ledgerAccountId))
+                ? null
+                : Number(metadata.ledgerAccountId),
+          }
+        : account,
+    );
+
+    const [row] = await db
+      .update(plaidConnections)
+      .set({
+        accountsJson: JSON.stringify(updatedAccounts),
+        updatedAt: new Date(),
+      })
+      .where(eq(plaidConnections.itemId, itemId))
+      .returning();
+
+    return {
+      ...row,
+      accounts: updatedAccounts,
+    };
+  }
+
+  async deletePlaidConnection(itemId: string): Promise<void> {
+    await this.ensurePlaidConnectionsTable();
+    await db.delete(plaidConnections).where(eq(plaidConnections.itemId, itemId));
   }
 
   // === BILLS REGISTRY (Sprint 1: USDA Loan Documentation) ===

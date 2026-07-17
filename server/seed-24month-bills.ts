@@ -1,4 +1,5 @@
 import { parse, addMonths, getDaysInMonth } from "date-fns";
+import { pathToFileURL } from "url";
 
 // 24-month bills payment history: Jan 2024 - Dec 2025
 // 6 recurring bills × 24 months = 144 payment records
@@ -10,7 +11,7 @@ const RECURRING_BILLS = [
   { id: 3, name: "Internet", dueDay: 13, amount: 124.0 },
   { id: 4, name: "Utilities", dueDay: 21, amount: 195.53 },
   { id: 5, name: "Groceries & Food", dueDay: 27, amount: 152.75 },
-  { id: 6, name: "Subscriptions", dueDay: 1, amount: null }, // Will be calculated from monthly total
+  { id: 6, name: "Subscriptions", dueDay: 1, amount: 0 }, // Will be calculated from monthly total
 ];
 
 // One-time bill: move-in cost on Aug 14, 2026 (but we're seeding history up to Dec 2025)
@@ -118,7 +119,11 @@ async function seedBillsPaymentHistory() {
 
 export { generatePaymentHistory, seedBillsPaymentHistory };
 
-if (require.main === module) {
+const isMainModule = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isMainModule) {
   seedBillsPaymentHistory().then(payments => {
     console.log(`\nPayment array (first 6 - Jan 2024):`);
     console.log(JSON.stringify(payments.slice(0, 6), null, 2));

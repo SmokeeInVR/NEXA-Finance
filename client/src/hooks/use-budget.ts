@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type InsertBudgetSettings } from "@shared/routes";
+import { api } from "@shared/routes";
+import type { InsertBudgetSettings } from "@shared/schema";
 
 export function useBudgetSettings() {
   return useQuery({

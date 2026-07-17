@@ -59,6 +59,13 @@ export const budgetSettings = pgTable("budget_settings", {
   incomeSource: text("income_source").notNull().default("MANUAL"),
   avgWindowWeeks: integer("avg_window_weeks").notNull().default(4),
   bufferGoalAmount: numeric("buffer_goal_amount").notNull().default("1000"),
+  myAllowance: numeric("my_allowance").notNull().default("0"),
+  spouseAllowance: numeric("spouse_allowance").notNull().default("0"),
+  allowanceConfigured: boolean("allowance_configured").notNull().default(false),
+  personalFlexPercent: numeric("personal_flex_percent").notNull().default("10"),
+  personalFlexMeSplitPct: numeric("personal_flex_me_split_pct").notNull().default("50"),
+  groceryBudgetOverride: numeric("grocery_budget_override"),
+  fuelBudgetOverride: numeric("fuel_budget_override"),
   bufferRerouteEnabled: boolean("buffer_reroute_enabled").notNull().default(false),
   rerouteTarget: text("reroute_target").notNull().default("SAVINGS"),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -211,6 +218,15 @@ export const billSchedule = pgTable("bill_schedule", {
   name: text("name").notNull(),
   amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
   dueDay: integer("due_day").notNull(), // 1-31, day of month bill is due
+  currency: text("currency").notNull().default("USD"),
+  frequency: text("frequency").notNull().default("monthly"),
+  endOfMonth: boolean("end_of_month").notNull().default(true),
+  active: boolean("active").notNull().default(true),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  importance: text("importance").notNull().default("important"),
+  sourceAccount: text("source_account"),
+  merchantPattern: text("merchant_pattern"),
   category: text("category").notNull().default("Other"),
   isVariable: boolean("is_variable").notNull().default(false), // true = estimated amount
   autopay: boolean("autopay").notNull().default(false),
@@ -230,6 +246,17 @@ export const billsRegistry = pgTable("bills_registry", {
   startDate: date("start_date").notNull(), // when bill starts (e.g., Aug 14 for new apt)
   endDate: date("end_date"), // when bill ends (nullable = ongoing)
   notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// === Plaid Connections (Persistent Bank Link State) ===
+export const plaidConnections = pgTable("plaid_connections", {
+  id: serial("id").primaryKey(),
+  itemId: text("item_id").notNull().unique(),
+  institutionName: text("institution_name").notNull(),
+  accessToken: text("access_token").notNull(),
+  accountsJson: text("accounts_json").notNull().default("[]"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -267,7 +294,7 @@ export const insertTransactionSchema = createInsertSchema(transactions).omit({
 }).extend({
   type: z.enum(TRANSACTION_TYPES),
   amount: z.string().or(z.number()).refine(
-    (val) => parseFloat(String(val)) > 0, 
+    (val) => Number.isFinite(parseFloat(String(val))) && parseFloat(String(val)) > 0, 
     { message: "Amount must be greater than zero" }
   ),
   fromAccountId: z.number().nullable().optional(),
@@ -299,6 +326,13 @@ export const insertBudgetSettingsSchema = createInsertSchema(budgetSettings).omi
   incomeSource: z.enum(["MANUAL", "LOG_AVG"]).default("MANUAL"),
   avgWindowWeeks: z.number().default(4),
   bufferGoalAmount: z.string().or(z.number()).default("1000"),
+  myAllowance: z.string().or(z.number()).refine((value) => Number.isFinite(Number(value)) && Number(value) >= 0).default("0"),
+  spouseAllowance: z.string().or(z.number()).refine((value) => Number.isFinite(Number(value)) && Number(value) >= 0).default("0"),
+  allowanceConfigured: z.boolean().default(false),
+  personalFlexPercent: z.string().or(z.number()).refine((value) => Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 100).default("10"),
+  personalFlexMeSplitPct: z.string().or(z.number()).refine((value) => Number.isFinite(Number(value)) && Number(value) >= 0 && Number(value) <= 100).default("50"),
+  groceryBudgetOverride: z.string().or(z.number()).nullable().optional().refine((value) => value == null || (Number.isFinite(Number(value)) && Number(value) >= 0)),
+  fuelBudgetOverride: z.string().or(z.number()).nullable().optional().refine((value) => value == null || (Number.isFinite(Number(value)) && Number(value) >= 0)),
   bufferRerouteEnabled: z.boolean().default(false),
   rerouteTarget: z.enum(["SAVINGS", "INVESTING"]).default("SAVINGS"),
 });
@@ -371,7 +405,7 @@ export const insertTransferSchema = createInsertSchema(transfers).omit({
   createdAt: true,
 }).extend({
   amount: z.string().or(z.number()).refine(
-    (val) => parseFloat(String(val)) > 0,
+    (val) => Number.isFinite(parseFloat(String(val))) && parseFloat(String(val)) > 0,
     { message: "Amount must be greater than zero" }
   ),
   createdBy: z.enum(["Me", "Spouse", "Joint"]).default("Me"),
@@ -384,7 +418,7 @@ export const insertBillScheduleSchema = createInsertSchema(billSchedule).omit({
   id: true,
   createdAt: true,
 }).extend({
-  amount: z.string().or(z.number()),
+  amount: z.string().or(z.number()).refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, "Amount must be a positive finite number"),
   dueDay: z.number().int().min(1).max(31),
   isVariable: z.boolean().default(false),
   autopay: z.boolean().default(false),
@@ -395,10 +429,16 @@ export const insertBillsRegistrySchema = createInsertSchema(billsRegistry).omit(
   createdAt: true,
   updatedAt: true,
 }).extend({
-  amount: z.string().or(z.number()),
+  amount: z.string().or(z.number()).refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, "Amount must be a positive finite number"),
   dueDay: z.number().int().min(1).max(31),
   isVariable: z.boolean().default(false),
   importance: z.enum(["critical", "important", "optional"]).default("important"),
+});
+
+export const insertPlaidConnectionSchema = createInsertSchema(plaidConnections).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
 });
 
 export const insertWeeklySnapshotSchema = createInsertSchema(weeklySnapshots).omit({
@@ -469,6 +509,9 @@ export type InsertBillScheduleItem = z.infer<typeof insertBillScheduleSchema>;
 
 export type BillsRegistryItem = typeof billsRegistry.$inferSelect;
 export type InsertBillsRegistryItem = z.infer<typeof insertBillsRegistrySchema>;
+
+export type PlaidConnection = typeof plaidConnections.$inferSelect;
+export type InsertPlaidConnection = z.infer<typeof insertPlaidConnectionSchema>;
 
 export type WeeklySnapshot = typeof weeklySnapshots.$inferSelect;
 export type InsertWeeklySnapshot = z.infer<typeof insertWeeklySnapshotSchema>;

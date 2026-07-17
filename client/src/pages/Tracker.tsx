@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useLocation } from "wouter";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,22 +10,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { insertWeeklyIncomeLogSchema, type WeeklyIncomeLog, type AccountBalance } from "@shared/schema";
-import { Loader2, Plus, Trash2, Save, Calendar as CalendarIcon, History } from "lucide-react";
+import { insertWeeklyIncomeLogSchema, type WeeklyIncomeLog } from "@shared/schema";
+import { Loader2, Plus, Trash2, Calendar as CalendarIcon, History, Wallet } from "lucide-react";
 import { format } from "date-fns";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { Input } from "@/components/ui/input";
 
 export default function Tracker() {
   const { toast } = useToast();
-  
-  // Queries
+  const [, setLocation] = useLocation();
+
   const { data: incomeLogs, isLoading: loadingLogs } = useQuery<WeeklyIncomeLog[]>({
     queryKey: ["/api/income"],
-  });
-
-  const { data: balances, isLoading: loadingBalances } = useQuery<AccountBalance[]>({
-    queryKey: ["/api/balances"],
   });
 
   const { data: latestIncome, refetch: refetchLatestIncome } = useQuery({
@@ -39,28 +36,19 @@ export default function Tracker() {
     }
   }, [latestIncome]);
 
-  // Mutations
   const saveIncomeLog = useMutation({
     mutationFn: async (data: any) => {
-      console.log("Tracker: form submitting data:", data);
       const payload = {
         ...data,
         myIncome: String(data.myIncome),
-        spouseIncome: String(data.spouseIncome)
+        spouseIncome: String(data.spouseIncome),
       };
-      console.log("Tracker: Sending income payload:", payload);
       const res = await apiRequest("POST", "/api/income", payload);
-      const result = await res.json();
-      console.log("Tracker: Received income result:", result);
-      return result;
+      return res.json();
     },
-    onSuccess: async (data) => {
-      console.log("Tracker: Save success, invalidating queries...");
+    onSuccess: async () => {
       await queryClient.invalidateQueries();
-      
-      console.log("Tracker: Refetching latest income...");
       const { data: latest } = await refetchLatestIncome();
-      console.log("Tracker: New latest income from refetch:", latest);
       if (latest) {
         setSavedLatest(latest);
       }
@@ -74,13 +62,12 @@ export default function Tracker() {
       });
     },
     onError: (error: any) => {
-      console.error("Tracker: Income save error:", error);
-      toast({ 
-        title: "Error", 
+      toast({
+        title: "Error",
         description: error.message || "Failed to save income log",
-        variant: "destructive"
+        variant: "destructive",
       });
-    }
+    },
   });
 
   const deleteIncomeLog = useMutation({
@@ -94,18 +81,6 @@ export default function Tracker() {
     },
   });
 
-  const saveBalances = useMutation({
-    mutationFn: async (data: any[]) => {
-      const res = await apiRequest("POST", "/api/balances", data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/balances"] });
-      toast({ title: "Success", description: "Balances updated" });
-    },
-  });
-
-  // Forms
   const form = useForm({
     resolver: zodResolver(insertWeeklyIncomeLogSchema),
     defaultValues: {
@@ -116,25 +91,7 @@ export default function Tracker() {
     },
   });
 
-  const [editableBalances, setEditableBalances] = useState<AccountBalance[]>([]);
-
-  useEffect(() => {
-    if (balances) {
-      setEditableBalances(balances);
-    }
-  }, [balances]);
-
-  const handleBalanceChange = (name: string, value: string) => {
-    setEditableBalances(prev => 
-      prev.map(b => b.name === name ? { ...b, balance: value } : b)
-    );
-  };
-
-  const onSaveBalances = () => {
-    saveBalances.mutate(editableBalances.map(({ name, balance }) => ({ name, balance })));
-  };
-
-  if (loadingLogs || loadingBalances) {
+  if (loadingLogs) {
     return (
       <Layout title="Tracker">
         <div className="flex items-center justify-center h-64">
@@ -147,7 +104,6 @@ export default function Tracker() {
   return (
     <Layout title="Tracker">
       <div className="space-y-6 pb-20">
-        {/* Weekly Income Log Section */}
         <Card className="shadow-2xl border-border bg-card">
           <CardHeader className="pb-3">
             <CardTitle className="text-lg flex items-center gap-2 text-gold">
@@ -158,8 +114,8 @@ export default function Tracker() {
             <form onSubmit={form.handleSubmit((data) => saveIncomeLog.mutate(data))} className="space-y-6">
               <div className="space-y-2">
                 <Label className="text-xs font-bold text-muted-foreground uppercase tracking-[0.2em]">Week Start Date</Label>
-                <Input 
-                  type="date" 
+                <Input
+                  type="date"
                   {...form.register("weekStartDate")}
                   className="h-12 text-black bg-white rounded-xl font-medium"
                 />
@@ -178,14 +134,14 @@ export default function Tracker() {
               </div>
               <div className="space-y-2">
                 <Label className="text-xs font-bold text-muted-foreground uppercase tracking-[0.2em]">Notes (Optional)</Label>
-                <Textarea 
+                <Textarea
                   {...form.register("notes")}
                   placeholder="Bonus, overtime, etc."
                   className="rounded-xl resize-none bg-white text-black min-h-[80px]"
                 />
               </div>
-              <Button 
-                type="submit" 
+              <Button
+                type="submit"
                 disabled={saveIncomeLog.isPending}
                 className="w-full h-12 rounded-xl bg-primary text-primary-foreground font-bold text-base shadow-lg shadow-gold/20"
               >
@@ -203,7 +159,6 @@ export default function Tracker() {
           </CardContent>
         </Card>
 
-        {/* Recent Income Logs */}
         <Card className="shadow-lg border-border bg-card">
           <CardHeader className="pb-3 border-b border-border">
             <CardTitle className="text-sm font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
@@ -247,41 +202,18 @@ export default function Tracker() {
           </CardContent>
         </Card>
 
-        {/* Balances Section */}
-        <Card className="shadow-2xl border-border bg-card">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg flex items-center gap-2 text-gold">
-              <Save className="w-5 h-5" /> Account Balances
+        <Card className="shadow-lg border-border bg-card">
+          <CardHeader className="pb-3 border-b border-border">
+            <CardTitle className="text-sm font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
+              <Wallet className="w-4 h-4" /> Balance Management Moved
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-5">
-              {editableBalances.map((balance) => (
-                <div key={balance.name} className="space-y-2">
-                  <div className="flex justify-between items-end px-1">
-                    <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">
-                      {balance.name}
-                    </Label>
-                    <span className="text-[9px] text-muted-foreground/40 font-bold">
-                      {balance.updatedAt ? format(new Date(balance.updatedAt), "MM/dd HH:mm") : "Never"}
-                    </span>
-                  </div>
-                  <MoneyInput
-                    label=""
-                    value={balance.balance}
-                    onChange={(e) => handleBalanceChange(balance.name, e.target.value)}
-                    className="h-11 text-black bg-white text-lg font-bold"
-                    onBlur={onSaveBalances}
-                  />
-                </div>
-              ))}
-            </div>
-            <Button 
-              onClick={onSaveBalances}
-              disabled={saveBalances.isPending}
-              className="w-full h-12 rounded-xl bg-success text-success-foreground font-bold text-base shadow-lg shadow-success/20 mt-2"
-            >
-              {saveBalances.isPending ? "Updating..." : "Save All Balances"}
+          <CardContent className="space-y-3 pt-4">
+            <p className="text-sm text-muted-foreground">
+              Tracker now focuses on weekly income history. Live cash balances and transfers are managed from the ledger-backed Accounts page.
+            </p>
+            <Button className="w-full" variant="outline" onClick={() => setLocation("/accounts")}>
+              Open Accounts
             </Button>
           </CardContent>
         </Card>

@@ -11,11 +11,10 @@ import {
  */
 
 async function seedSprint1() {
-  console.log("🌱 Sprint 1 Seed: Initializing Bills Registry & House Fund...\n");
+  console.log("Sprint 1 Seed: Initializing Bills Registry and House Fund...\n");
 
   try {
-    // 1. Create House Fund account (if not exists)
-    console.log("📌 Creating House Fund account...");
+    console.log("Creating House Fund account...");
     const houseFund = await db
       .insert(accounts)
       .values({
@@ -29,15 +28,20 @@ async function seedSprint1() {
       .returning();
 
     if (houseFund.length > 0) {
-      console.log(`   ✓ House Fund created (ID: ${houseFund[0].id})\n`);
+      console.log(`   OK House Fund created (ID: ${houseFund[0].id})\n`);
     } else {
-      console.log("   ℹ House Fund already exists\n");
+      console.log("   INFO House Fund already exists\n");
     }
 
-    // 2. Create Bills Registry entries
-    console.log("📋 Populating Bills Registry...");
+    console.log("Populating Bills Registry...");
 
-    const { recurring: recurringBills, oneTime: oneTimeBills } = getSprint1BillsRegistry();
+    const planningDate = new Date();
+    const {
+      recurring: recurringBills,
+      oneTime: oneTimeBills,
+      activeRecurringTotal,
+      futureRecurringTotal,
+    } = getSprint1BillsRegistry(planningDate);
 
     let billCount = 0;
 
@@ -49,7 +53,7 @@ async function seedSprint1() {
         .returning();
 
       if (result.length > 0) {
-        console.log(`   ✓ ${bill.name} ($${bill.amount})`);
+        console.log(`   OK ${bill.name} ($${bill.amount})`);
         billCount++;
       }
     }
@@ -62,26 +66,23 @@ async function seedSprint1() {
         .returning();
 
       if (result.length > 0) {
-        console.log(`   ✓ ${bill.name} ($${bill.amount}) [ONE-TIME]`);
+        console.log(`   OK ${bill.name} ($${bill.amount}) [ONE-TIME]`);
         billCount++;
       }
     }
 
-    console.log(`\n   ✓ ${billCount} critical household bills registered (5 recurring + 1 one-time)\n`);
+    console.log(`\n   OK ${billCount} household planning bills registered (${recurringBills.length} recurring + ${oneTimeBills.length} one-time)`);
+    console.log(`   OK Active recurring baseline: $${activeRecurringTotal}/month`);
+    console.log(`   OK Future recurring baseline after move: $${futureRecurringTotal}/month\n`);
 
-    // 3. Initialize weekly snapshot (this week's baseline)
-    console.log("📊 Creating weekly snapshot baseline...");
+    console.log("Creating weekly snapshot baseline...");
 
     const today = new Date();
     const weekStartDate = new Date(today);
-    weekStartDate.setDate(today.getDate() - today.getDay()); // Start of week (Sunday)
-
+    weekStartDate.setDate(today.getDate() - today.getDay());
     const weekStart = weekStartDate.toISOString().split("T")[0];
 
-    // Weekly baseline is computed from the active target budget.
-    // Income: $1,030; Expenses: $738; Debt: $161; Surplus: $131.
-    // House fund allocation matches the computed surplus in this baseline.
-    const weeklySnapshot = getSprint1WeeklySnapshot();
+    const weeklySnapshot = getSprint1WeeklySnapshot(today);
 
     const snapshot = await db
       .insert(weeklySnapshots)
@@ -89,25 +90,25 @@ async function seedSprint1() {
         weekStartDate: weekStart,
         ...weeklySnapshot,
         status: "on_track",
-        notes: "Sprint 1 baseline: weekly snapshot for USDA 24-month trail",
+        notes: "Sprint 1 baseline: current lease active until move date; future apartment tracked separately",
       })
       .onConflictDoNothing()
       .returning();
 
     if (snapshot.length > 0) {
-      console.log(`   ✓ Weekly snapshot created for week of ${weekStart}`);
-      console.log(`     Income: $1,030 | Expenses: $738 | Debt: $161 | House Fund: $131 | Surplus: $131\n`);
+      console.log(`   OK Weekly snapshot created for week of ${weekStart}`);
+      console.log(
+        `     Income: $${weeklySnapshot.householdIncome} | Expenses: $${weeklySnapshot.householdExpense} | Debt: $${weeklySnapshot.debtPayment} | House Fund: $${weeklySnapshot.houseFundAllocation} | Surplus: $${weeklySnapshot.surplus}\n`,
+      );
     }
 
-    console.log("✅ Sprint 1 seed complete!\n");
-    console.log("📌 Next steps:");
+    console.log("Sprint 1 seed complete.\n");
+    console.log("Next steps:");
     console.log("   1. Verify Bills Registry via: SELECT * FROM bills_registry");
     console.log("   2. Verify House Fund account created");
     console.log("   3. Run: npm run build");
-    console.log("   4. Commit: git add shared/schema.ts && git commit -m 'Sprint 1: Add bills tracking tables'\n");
-
   } catch (error) {
-    console.error("❌ Seed failed:", error);
+    console.error("Seed failed:", error);
     process.exit(1);
   }
 }

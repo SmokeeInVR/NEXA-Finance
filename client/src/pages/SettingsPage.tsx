@@ -54,6 +54,13 @@ function SetupTab() {
       incomeSource: "MANUAL",
       avgWindowWeeks: 4,
       bufferGoalAmount: "1000",
+      personalFlexPercent: 10,
+      personalFlexMeSplitPct: 50,
+      myAllowance: 0,
+      spouseAllowance: 0,
+      allowanceConfigured: false,
+      groceryBudgetOverride: null,
+      fuelBudgetOverride: null,
       bufferRerouteEnabled: false,
       rerouteTarget: "SAVINGS",
     },
@@ -79,6 +86,13 @@ function SetupTab() {
         debtBufferMode: (settings.debtBufferMode as any) || "PERCENT",
         tradingMode: (settings.tradingMode as any) || "PERCENT",
         bufferGoalAmount: settings.bufferGoalAmount?.toString() || "1000",
+        personalFlexPercent: Number(settings.personalFlexPercent ?? 10),
+        personalFlexMeSplitPct: Number(settings.personalFlexMeSplitPct ?? 50),
+        myAllowance: Number(settings.myAllowance || 0),
+        spouseAllowance: Number(settings.spouseAllowance || 0),
+        allowanceConfigured: !!settings.allowanceConfigured,
+        groceryBudgetOverride: settings.groceryBudgetOverride == null ? null : Number(settings.groceryBudgetOverride),
+        fuelBudgetOverride: settings.fuelBudgetOverride == null ? null : Number(settings.fuelBudgetOverride),
         bufferRerouteEnabled: !!settings.bufferRerouteEnabled,
         rerouteTarget: (settings.rerouteTarget as any) || "SAVINGS",
       } as any);
@@ -156,6 +170,76 @@ function SetupTab() {
                   </FormItem>
                 )}
               />
+              <FormField
+                control={form.control}
+                name="myAllowance"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Me Allowance</FormLabel>
+                    <FormControl><MoneyInput label="" {...field} value={field.value?.toString() || "0"} className="h-11 bg-secondary border-border text-foreground" /></FormControl>
+                    <FormDescription className="text-xs">Required before Finance can recommend extra debt payment.</FormDescription>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="spouseAllowance"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Spouse Allowance</FormLabel>
+                    <FormControl><MoneyInput label="" {...field} value={field.value?.toString() || "0"} className="h-11 bg-secondary border-border text-foreground" /></FormControl>
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="allowanceConfigured"
+                render={({ field }) => (
+                  <FormItem className="flex items-center justify-between rounded-lg border border-border p-3">
+                    <div><FormLabel>Allow debt recommendation</FormLabel><FormDescription>Explicitly confirm these allowances are configured.</FormDescription></div>
+                    <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+                  </FormItem>
+                )}
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField control={form.control} name="personalFlexPercent" render={({ field }) => <FormItem><FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Personal flex rate (%)</FormLabel><FormControl><Input type="number" min={0} max={100} value={field.value ?? 10} onChange={(event) => field.onChange(Number(event.target.value))} className="h-11 bg-secondary border-border text-foreground" /></FormControl><FormDescription className="text-xs">Percent of safe surplus protected after essentials.</FormDescription></FormItem>} />
+                <FormField control={form.control} name="personalFlexMeSplitPct" render={({ field }) => <FormItem><FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Me personal flex split (%)</FormLabel><FormControl><Input type="number" min={0} max={100} value={field.value ?? 50} onChange={(event) => field.onChange(Number(event.target.value))} className="h-11 bg-secondary border-border text-foreground" /></FormControl><FormDescription className="text-xs">Spouse receives the remainder.</FormDescription></FormItem>} />
+              </div>
+              <FormField
+                control={form.control}
+                name="avgWindowWeeks"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Variable-spend lookback (weeks)</FormLabel>
+                    <FormControl><Input type="number" min={1} max={52} value={field.value ?? 4} onChange={(event) => field.onChange(Number(event.target.value))} className="h-11 bg-secondary border-border text-foreground" /></FormControl>
+                    <FormDescription className="text-xs">Historical grocery and fuel suggestions use finalized, deduplicated expenses from this window.</FormDescription>
+                  </FormItem>
+                )}
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField
+                  control={form.control}
+                  name="groceryBudgetOverride"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Temporary grocery weekly target</FormLabel>
+                      <FormControl><MoneyInput label="" value={field.value?.toString() || ""} onChange={field.onChange} className="h-11 bg-secondary border-border text-foreground" /></FormControl>
+                      <FormDescription className="text-xs">Leave blank to use history.</FormDescription>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="fuelBudgetOverride"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Temporary fuel weekly target</FormLabel>
+                      <FormControl><MoneyInput label="" value={field.value?.toString() || ""} onChange={field.onChange} className="h-11 bg-secondary border-border text-foreground" /></FormControl>
+                      <FormDescription className="text-xs">Leave blank to use history.</FormDescription>
+                    </FormItem>
+                  )}
+                />
+              </div>
             </CardContent>
           </Card>
 

@@ -18,9 +18,11 @@ import { useToast } from "@/hooks/use-toast";
 import { startOfWeek, endOfWeek, isWithinInterval, startOfMonth, endOfMonth, format, differenceInCalendarWeeks, addWeeks } from "date-fns";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import WeeklyIncomeCard from "@/components/WeeklyIncomeCard";
+import { LiveBankSnapshotCard } from "@/components/LiveBankSnapshotCard";
 import { WeeklySnapshotCard } from "@/components/WeeklySnapshotCard";
 import { HouseFundTracker } from "@/components/HouseFundTracker";
 import { BillsRegistryCard } from "@/components/BillsRegistryCard";
+import { FinanceTrustCard } from "@/components/FinanceTrustCard";
 
 interface BillScheduleItem {
   id: number;
@@ -298,15 +300,33 @@ export default function Dashboard() {
   return (
     <Layout title="Dashboard">
       <div className="space-y-6">
+        <div className="rounded-xl border border-border bg-card/70 p-4 shadow-lg">
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-gold">Finance Hub</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Live Bank Snapshot is the real account-balance layer. Weekly Cash Flow, House Fund, and Bills Registry are
+            the planning layer so the app stops blending live truth with manual assumptions.
+          </p>
+        </div>
 
-        {/* Weekly Cash Flow Snapshot - P0 Priority */}
-        <WeeklySnapshotCard />
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.9fr)]">
+          <div className="space-y-6">
+            <LiveBankSnapshotCard />
+            <FinanceTrustCard />
+            <BillsRegistryCard />
+          </div>
+          <div className="space-y-6">
+            <WeeklySnapshotCard />
+            <HouseFundTracker />
+          </div>
+        </div>
 
-        {/* House Fund Tracker - P0 Priority */}
-        <HouseFundTracker />
-
-        {/* Bills Registry - P0 Priority */}
-        <BillsRegistryCard />
+        <details className="group rounded-2xl border border-border bg-card/70 shadow-lg">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-bold uppercase tracking-[0.25em] text-muted-foreground">
+            <span>Planning and manual controls</span>
+            <span className="text-gold group-open:hidden">Show</span>
+            <span className="hidden text-gold group-open:inline">Hide</span>
+          </summary>
+          <div className="space-y-6 px-4 pb-4">
 
         {/* Summary Cards */}
         <div className="grid grid-cols-2 gap-3">
@@ -760,7 +780,9 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-<WeeklyIncomeCard />
+            <WeeklyIncomeCard />
+          </div>
+        </details>
 
       </div>
 
