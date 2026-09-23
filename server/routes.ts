@@ -6,6 +6,8 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { Parser } from "json2csv";
 import { PlaidApi, PlaidEnvironments, Configuration, Products, CountryCode } from 'plaid';
+import { timingSafeEqual } from "node:crypto";
+import { buildNexaFinanceBaseline } from "./nexa-finance-baseline";
 import { mealEstimateEventSchema, financeObligationInputSchema, normalizeCompatibilityObligation, buildTrustSummary } from "./finance-trust";
 
 export async function registerRoutes(
@@ -1210,6 +1212,55 @@ export async function registerRoutes(
   });
 
   
+  // ===== NEXA AGGREGATE-ONLY FINANCE BASELINE =====
+  // This is intentionally separate from the public Plaid/ledger routes: it never serializes account records.
+  app.get("/api/nexa/finance-baseline", async (req, res) => {
+    const serviceSecret = process.env.NEXA_FINANCE_BASELINE_SERVICE_TOKEN;
+    const expectedToken = serviceSecret || "";
+    const authorization = req.get("authorization") || "";
+    const suppliedToken = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    const authenticated = Boolean(serviceSecret)
+      && Buffer.byteLength(suppliedToken) === Buffer.byteLength(expectedToken)
+      && timingSafeEqual(Buffer.from(suppliedToken), Buffer.from(expectedToken));
+
+    if (!serviceSecret) {
+      res.status(503).json({ message: "NEXA finance baseline service authentication is not configured" });
+      return;
+    }
+    if (!authenticated) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+
+    const fetchedAt = new Date();
+    const connectionHealth = { configured: plaidTokenStore.size, attempted: 0, succeeded: 0, failed: 0 };
+    const plaidAccounts: Array<{ type?: unknown; balance?: unknown; availableBalance?: unknown }> = [];
+
+    for (const stored of plaidTokenStore.values()) {
+      connectionHealth.attempted += 1;
+      try {
+        const response = await plaidClient.accountsGet({ access_token: stored.accessToken });
+        connectionHealth.succeeded += 1;
+        plaidAccounts.push(...response.data.accounts.map((account) => ({
+          type: account.type,
+          balance: account.balances.current,
+          availableBalance: account.balances.available,
+        })));
+      } catch (error) {
+        connectionHealth.failed += 1;
+        console.warn("NEXA finance baseline Plaid fetch failed");
+      }
+    }
+
+    try {
+      const manualDebts = await store.getDebtsWithPayments();
+      res.json(buildNexaFinanceBaseline({ fetchedAt, connectionHealth, plaidAccounts, manualDebts }));
+    } catch (error) {
+      console.error("NEXA finance baseline failed");
+      res.status(500).json({ message: "Failed to build NEXA finance baseline" });
+    }
+  });
+
   // ===== PLAID ROUTES =====
 
   app.post("/api/plaid/create-link-token", async (req, res) => {

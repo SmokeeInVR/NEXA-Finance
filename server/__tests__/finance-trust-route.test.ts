@@ -4,11 +4,11 @@ import { createServer, request as httpRequest } from "node:http";
 import { describe, it } from "node:test";
 import { registerRoutes } from "../routes";
 
-function request(server: ReturnType<typeof createServer>, method: string, path: string, body?: unknown) {
+function request(server: ReturnType<typeof createServer>, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
   return new Promise<{ status: number; json: any }>((resolve, reject) => {
     const address = server.address();
     if (!address || typeof address === "string") return reject(new Error("server did not bind"));
-    const req = httpRequest({ hostname: "127.0.0.1", port: address.port, path, method, headers: { "content-type": "application/json" } }, (res) => {
+    const req = httpRequest({ hostname: "127.0.0.1", port: address.port, path, method, headers: { "content-type": "application/json", ...headers } }, (res) => {
       let text = "";
       res.on("data", (chunk) => { text += chunk; });
       res.on("end", () => resolve({ status: res.statusCode || 0, json: text ? JSON.parse(text) : null }));
@@ -65,6 +65,42 @@ describe("Finance trust route boundary", () => {
       assert.equal(invalid.status, 400);
       assert.equal(invalid.json.message, "Invalid recurring obligation");
     } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("rejects unauthenticated baseline reads and returns aggregate-only data to the service", async () => {
+    const previousSecret = process.env.NEXA_FINANCE_BASELINE_SERVICE_TOKEN;
+    process.env.NEXA_FINANCE_BASELINE_SERVICE_TOKEN = "test-only-service-secret";
+    const app = express();
+    app.use(express.json());
+    const server = createServer(app);
+    const fakeStore: any = {
+      markBillsPoolAsExcluded: async () => undefined,
+      getPlaidConnections: async () => [],
+      getDebtsWithPayments: async () => [{ remainingBalance: 120 }],
+    };
+    await registerRoutes(server, app, fakeStore);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    try {
+      const unauthenticated = await request(server, "GET", "/api/nexa/finance-baseline");
+      assert.equal(unauthenticated.status, 401);
+
+      const authenticated = await request(
+        server,
+        "GET",
+        "/api/nexa/finance-baseline",
+        undefined,
+        { authorization: "Bearer test-only-service-secret" },
+      );
+      assert.equal(authenticated.status, 200);
+      assert.equal(authenticated.json.baselineStatus, "incomplete");
+      assert.equal(authenticated.json.combinedDebtStatus, "needs_mapping");
+      assert.deepEqual(authenticated.json.manualLedgerDebt, { total: 120, count: 1 });
+      assert.equal(JSON.stringify(authenticated.json).match(/name|mask|accountId|institution|accessToken|transaction/i), null);
+    } finally {
+      if (previousSecret === undefined) delete process.env.NEXA_FINANCE_BASELINE_SERVICE_TOKEN;
+      else process.env.NEXA_FINANCE_BASELINE_SERVICE_TOKEN = previousSecret;
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
   });
